@@ -32,7 +32,7 @@ def test_simplex_init_normalizes_input_arrays(load_module: object) -> None:
     data = pd.DataFrame(
         {
             "food_name": ["A", "B"],
-            "Value": [2.5, "3.0"],
+            "value": [2.5, "3.0"],
             "protein": [10.0, 20.0],
             "carbs": [15.0, 30.0],
         }
@@ -51,7 +51,7 @@ def test_simplex_init_normalizes_input_arrays(load_module: object) -> None:
 
 
 def test_simplex_init_raises_when_value_column_missing(load_module: object) -> None:
-    """Reject data that does not provide the required Value column."""
+    """Reject data that does not provide the required value column."""
     module = _load_frontend_optimize(
         load_module,
         "test_frontend_optimize_missing_value",
@@ -66,6 +66,6 @@ def test_simplex_init_raises_when_value_column_missing(load_module: object) -> N
 
     try:
         module.Simplex(data=data, bounds=bounds)
-        assert False, "Expected ValueError when Value column is missing."
+        assert False, "Expected ValueError when value column is missing."
     except ValueError as exc:
-        assert "Value column" in str(exc)
+        assert "value column" in str(exc)

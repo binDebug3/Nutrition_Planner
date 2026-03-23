@@ -1,15 +1,20 @@
 """Streamlit frontend for nutrient filtering and food lookup."""
 
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, List, Optional
 
 import streamlit as st
 
+from auth_service import AuthService
 from auth_store import create_user, get_user_password_hash, password_matches
+from filters_ui import FilterPanel
 from logging_setup import configure_app_logging
+from models import DIETARY_TOGGLE_LABELS, NUTRIENT_SPECS, NutrientSpec
 from optimize import OptimizationResult, Simplex, SliderBounds
+from query_builder import FoodQueryBuilder
+from recommendation_view import RecommendationView
+from state_manager import NutrientStateManager
 
 
 APP_PATH = Path(__file__).resolve()
@@ -21,117 +26,14 @@ log = LOGGER_MAP["app"]
 auth_log = LOGGER_MAP["auth"]
 query_log = LOGGER_MAP["query"]
 
-QUERY_LIMIT = 200
+STATE_MANAGER = NutrientStateManager(st, log)
+FILTER_PANEL = FilterPanel(st, log, STATE_MANAGER)
+QUERY_BUILDER = FoodQueryBuilder(query_log)
+AUTH_SERVICE = AuthService(st, auth_log, log, USER_DB_PATH)
+RECOMMENDATION_VIEW = RecommendationView(st, log)
 
-DIETARY_TOGGLE_LABELS: List[Tuple[str, str]] = [
-    ("gluten_free", "Gluten Free"),
-    ("vegan", "Vegan"),
-    ("vegetarian", "Vegetarian"),
-    ("dairy_free", "Dairy Free"),
-    ("nut_free", "Nut-Free"),
-]
-
-
-@dataclass(frozen=True)
-class NutrientSpec:
-    """
-    UI and SQL metadata for a nutrient filter.
-
-    Args:
-        key: Stable session-state key prefix.
-        label: Display name in the UI.
-        db_column: Column name in the `food_nutrients` table.
-        bounds: Inclusive min and max allowed values.
-        defaults: Default min and max values.
-    """
-
-    key: str
-    label: str
-    db_column: str
-    bounds: Tuple[float, float]
-    defaults: Tuple[float, float]
-
-
-NUTRIENT_SPECS: List[NutrientSpec] = [
-    NutrientSpec(
-        "kilocalories",
-        "Kilocalories",
-        "kilocalories",
-        (0.0, 4000.0),
-        (100.0, 700.0),
-    ),
-    NutrientSpec("fat", "Fat", "fat", (0.0, 100.0), (5.0, 40.0)),
-    NutrientSpec(
-        "saturated_fat",
-        "Saturated Fat",
-        "saturated_fat",
-        (0.0, 50.0),
-        (0.0, 15.0),
-    ),
-    NutrientSpec(
-        "sugar",
-        "Sugar",
-        "sugar",
-        (0.0, 120.0),
-        (0.0, 40.0),
-    ),
-    NutrientSpec("sodium", "Sodium", "sodium", (0.0, 5000.0), (50.0, 1500.0)),
-    NutrientSpec(
-        "cholesterol",
-        "Cholesterol",
-        "Cholesterol",
-        (0.0, 300.0),
-        (0.0, 75.0),
-    ),
-    NutrientSpec("protein", "Protein", "Protein", (0.0, 100.0), (10.0, 60.0)),
-    NutrientSpec(
-        "carbs",
-        "Carbs",
-        "Carbohydrate, by summation",
-        (0.0, 150.0),
-        (10.0, 80.0),
-    ),
-    NutrientSpec("iron", "Iron", "iron", (0.0, 45.0), (2.0, 18.0)),
-    NutrientSpec("calcium", "Calcium", "calcium", (0.0, 1500.0), (100.0, 900.0)),
-    NutrientSpec("potassium", "Potassium", "potassium", (0.0, 5000.0), (200.0, 3500.0)),
-    NutrientSpec("fiber", "Fiber", "fiber", (0.0, 80.0), (5.0, 35.0)),
-    NutrientSpec("vitamin_a", "Vitamin A", "vitamin_a", (0.0, 3000.0), (100.0, 900.0)),
-    NutrientSpec(
-        "vitamin_b",
-        "Vitamin B",
-        "vitamin_b",
-        (0.0, 10.0),
-        (0.1, 2.0),
-    ),
-    NutrientSpec(
-        "vitamin_c",
-        "Vitamin C",
-        "vitamin_c",
-        (0.0, 2000.0),
-        (10.0, 250.0),
-    ),
-    NutrientSpec(
-        "vitamin_d",
-        "Vitamin D",
-        "vitamin_d",
-        (0.0, 200.0),
-        (2.0, 50.0),
-    ),
-    NutrientSpec(
-        "vitamin_e",
-        "Vitamin E",
-        "vitamin_e",
-        (0.0, 100.0),
-        (1.0, 20.0),
-    ),
-    NutrientSpec(
-        "vitamin_k",
-        "Vitamin K",
-        "vitamin_k",
-        (0.0, 500.0),
-        (5.0, 150.0),
-    ),
-]
+# Kept for test compatibility that introspects these imported symbols from app.py.
+_ = (create_user, get_user_password_hash, password_matches)
 
 
 def _any_key(spec: NutrientSpec) -> str:
@@ -144,10 +46,7 @@ def _any_key(spec: NutrientSpec) -> str:
     Returns:
         Session-state key.
     """
-    log.info(
-        "Building Any toggle key", extra={"event": "ui.key.any", "nutrient": spec.key}
-    )
-    return f"{spec.key}_any"
+    return STATE_MANAGER.any_key(spec)
 
 
 def _slider_key(spec: NutrientSpec) -> str:
@@ -160,10 +59,7 @@ def _slider_key(spec: NutrientSpec) -> str:
     Returns:
         Session-state key.
     """
-    log.info(
-        "Building slider key", extra={"event": "ui.key.slider", "nutrient": spec.key}
-    )
-    return f"{spec.key}_slider"
+    return STATE_MANAGER.slider_key(spec)
 
 
 def _min_key(spec: NutrientSpec) -> str:
@@ -176,10 +72,7 @@ def _min_key(spec: NutrientSpec) -> str:
     Returns:
         Session-state key.
     """
-    log.info(
-        "Building min input key", extra={"event": "ui.key.min", "nutrient": spec.key}
-    )
-    return f"{spec.key}_min"
+    return STATE_MANAGER.min_key(spec)
 
 
 def _max_key(spec: NutrientSpec) -> str:
@@ -192,90 +85,7 @@ def _max_key(spec: NutrientSpec) -> str:
     Returns:
         Session-state key.
     """
-    log.info(
-        "Building max input key", extra={"event": "ui.key.max", "nutrient": spec.key}
-    )
-    return f"{spec.key}_max"
-
-
-def _coerce_float(value: object, fallback: float) -> float:
-    """
-    Convert a value to float with a fallback.
-
-    Args:
-        value: Raw value from session state.
-        fallback: Value returned when conversion fails.
-
-    Returns:
-        Float value.
-    """
-    log.info("Coercing numeric value", extra={"event": "ui.value.coerce"})
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return fallback
-
-
-def _clamp(value: float, lower: float, upper: float) -> float:
-    """
-    Clamp value into an inclusive range.
-
-    Args:
-        value: Value to clamp.
-        lower: Inclusive lower bound.
-        upper: Inclusive upper bound.
-
-    Returns:
-        Clamped value.
-    """
-    log.info("Clamping numeric value", extra={"event": "ui.value.clamp"})
-    return max(lower, min(value, upper))
-
-
-def _initialize_nutrient_state(spec: NutrientSpec) -> None:
-    """
-    Seed session state keys for a nutrient filter.
-
-    Args:
-        spec: Nutrient specification.
-    """
-    log.info(
-        "Initializing nutrient session state",
-        extra={"event": "ui.nutrient.initialize", "nutrient": spec.key},
-    )
-    any_key = _any_key(spec)
-    slider_key = _slider_key(spec)
-    min_key = _min_key(spec)
-    max_key = _max_key(spec)
-
-    if any_key not in st.session_state:
-        st.session_state[any_key] = True
-
-    if slider_key not in st.session_state:
-        st.session_state[slider_key] = spec.defaults
-
-    if min_key not in st.session_state:
-        st.session_state[min_key] = spec.defaults[0]
-
-    if max_key not in st.session_state:
-        st.session_state[max_key] = spec.defaults[1]
-
-
-def _sync_inputs_from_slider(spec: NutrientSpec) -> None:
-    """
-    Keep min and max inputs aligned with the slider selection.
-
-    Args:
-        spec: Nutrient specification.
-    """
-    log.info(
-        "Syncing numeric inputs from slider",
-        extra={"event": "ui.sync.from_slider", "nutrient": spec.key},
-    )
-    slider_value = st.session_state[_slider_key(spec)]
-    slider_min, slider_max = tuple(slider_value)
-    st.session_state[_min_key(spec)] = float(slider_min)
-    st.session_state[_max_key(spec)] = float(slider_max)
+    return STATE_MANAGER.max_key(spec)
 
 
 def _sync_slider_from_inputs(spec: NutrientSpec) -> None:
@@ -285,152 +95,7 @@ def _sync_slider_from_inputs(spec: NutrientSpec) -> None:
     Args:
         spec: Nutrient specification.
     """
-    log.info(
-        "Syncing slider from numeric inputs",
-        extra={"event": "ui.sync.from_inputs", "nutrient": spec.key},
-    )
-    lower, upper = spec.bounds
-    raw_min = _coerce_float(st.session_state.get(_min_key(spec)), spec.defaults[0])
-    raw_max = _coerce_float(st.session_state.get(_max_key(spec)), spec.defaults[1])
-    bounded_min = _clamp(raw_min, lower, upper)
-    bounded_max = _clamp(raw_max, lower, upper)
-    st.session_state[_min_key(spec)] = bounded_min
-    st.session_state[_max_key(spec)] = bounded_max
-
-    if bounded_min < bounded_max:
-        st.session_state[_slider_key(spec)] = (bounded_min, bounded_max)
-
-
-def _is_invalid_range(spec: NutrientSpec) -> bool:
-    """
-    Return True when active manual bounds are invalid.
-
-    Args:
-        spec: Nutrient specification.
-
-    Returns:
-        Whether the current min/max pair is invalid.
-    """
-    log.info(
-        "Validating nutrient range",
-        extra={"event": "ui.validate.range", "nutrient": spec.key},
-    )
-    if st.session_state.get(_any_key(spec), False):
-        return False
-    min_value = _coerce_float(st.session_state.get(_min_key(spec)), spec.defaults[0])
-    max_value = _coerce_float(st.session_state.get(_max_key(spec)), spec.defaults[1])
-    return min_value >= max_value
-
-
-def _render_nutrient_filter(spec: NutrientSpec) -> bool:
-    """
-    Render one nutrient filter row and return invalid-state status.
-
-    Args:
-        spec: Nutrient specification.
-
-    Returns:
-        True when the filter has an invalid min/max pair.
-    """
-    log.info(
-        "Rendering nutrient filter",
-        extra={"event": "ui.nutrient.render", "nutrient": spec.key},
-    )
-    _initialize_nutrient_state(spec)
-    header_controls = st.columns([0.56, 0.1, 0.17, 0.17])
-
-    with header_controls[0]:
-        st.markdown(f"**{spec.label}**")
-
-    with header_controls[1]:
-        st.toggle("", key=_any_key(spec), label_visibility="collapsed")
-        st.write("Any" if st.session_state[_any_key(spec)] else "")
-
-    is_any_enabled = bool(st.session_state[_any_key(spec)])
-
-    with header_controls[2]:
-        st.number_input(
-            "Min",
-            min_value=spec.bounds[0],
-            max_value=spec.bounds[1],
-            key=_min_key(spec),
-            on_change=_sync_slider_from_inputs,
-            args=(spec,),
-            disabled=is_any_enabled,
-        )
-
-    with header_controls[3]:
-        st.number_input(
-            "Max",
-            min_value=spec.bounds[0],
-            max_value=spec.bounds[1],
-            key=_max_key(spec),
-            on_change=_sync_slider_from_inputs,
-            args=(spec,),
-            disabled=is_any_enabled,
-        )
-
-    st.slider(
-        "Range",
-        min_value=spec.bounds[0],
-        max_value=spec.bounds[1],
-        key=_slider_key(spec),
-        value=spec.defaults,
-        on_change=_sync_inputs_from_slider,
-        args=(spec,),
-        disabled=is_any_enabled,
-    )
-
-    has_invalid_range = _is_invalid_range(spec)
-
-    if has_invalid_range:
-        st.warning(f"{spec.label}: min must be less than max.")
-
-    return has_invalid_range
-
-
-def _render_dietary_toggles() -> Dict[str, bool]:
-    """
-    Render top-of-page dietary preference toggles.
-
-    Returns:
-        Mapping of dietary preference keys to enabled states.
-    """
-    log.info("Rendering dietary toggles", extra={"event": "ui.dietary.render"})
-    st.subheader("Dietary Preferences")
-    preference_columns = st.columns([1.0] * len(DIETARY_TOGGLE_LABELS))
-    dietary_preferences: Dict[str, bool] = {}
-
-    for column, (preference_key, label) in zip(
-        preference_columns, DIETARY_TOGGLE_LABELS
-    ):
-        with column:
-            toggle_key = f"dietary_{preference_key}"
-            dietary_preferences[preference_key] = st.toggle(
-                label,
-                key=toggle_key,
-                value=False,
-            )
-
-    return dietary_preferences
-
-
-def _format_sql_number(value: float) -> str:
-    """
-    Format numeric values for SQL literal injection.
-
-    Args:
-        value: Float value.
-
-    Returns:
-        Stable numeric literal string.
-    """
-    log.info(
-        "Formatting SQL numeric literal", extra={"event": "query.sql.format_numeric"}
-    )
-    if float(value).is_integer():
-        return str(int(value))
-    return f"{value:.4f}".rstrip("0").rstrip(".")
+    STATE_MANAGER.sync_slider_from_inputs(spec)
 
 
 def _build_slider_bounds(specs: List[NutrientSpec]) -> SliderBounds:
@@ -443,27 +108,57 @@ def _build_slider_bounds(specs: List[NutrientSpec]) -> SliderBounds:
     Returns:
         Dataclass containing per-nutrient min and max limits.
     """
-    log.info("Building optimization bounds", extra={"event": "optimizer.bounds.build"})
-    minimums: Dict[str, float | None] = {}
-    maximums: Dict[str, float | None] = {}
+    return STATE_MANAGER.build_slider_bounds(specs)
 
-    for spec in specs:
-        column_name = spec.db_column
-        if st.session_state.get(_any_key(spec), False):
-            minimums[column_name] = None
-            maximums[column_name] = None
-            continue
 
-        minimums[column_name] = _coerce_float(
-            st.session_state.get(_min_key(spec)),
-            spec.defaults[0],
-        )
-        maximums[column_name] = _coerce_float(
-            st.session_state.get(_max_key(spec)),
-            spec.defaults[1],
-        )
+def _build_where_clauses(specs: List[NutrientSpec]) -> List[str]:
+    """
+    Build SQL filter clauses.
 
-    return SliderBounds(minimums=minimums, maximums=maximums)
+    Args:
+        specs: Nutrient specifications.
+
+    Returns:
+        SQL predicate fragments.
+    """
+    return QUERY_BUILDER.build_where_clauses(specs)
+
+
+def _build_food_query(specs: List[NutrientSpec]) -> str:
+    """
+    Build the SQL query for the food table.
+
+    Args:
+        specs: Nutrient specifications.
+
+    Returns:
+        SQL query string.
+    """
+    return QUERY_BUILDER.build_food_query(specs)
+
+
+def _render_dietary_toggles() -> Dict[str, bool]:
+    """
+    Render top-of-page dietary preference toggles.
+
+    Returns:
+        Mapping of dietary preference keys to enabled states.
+    """
+    _ = DIETARY_TOGGLE_LABELS
+    return FILTER_PANEL.render_dietary_toggles(NUTRIENT_SPECS)
+
+
+def _render_nutrient_filter(spec: NutrientSpec) -> bool:
+    """
+    Render one nutrient filter row and return invalid-state status.
+
+    Args:
+        spec: Nutrient specification.
+
+    Returns:
+        True when the filter has an invalid min/max pair.
+    """
+    return FILTER_PANEL.render_nutrient_filter(spec)
 
 
 def _render_recommendation_summary(
@@ -479,43 +174,19 @@ def _render_recommendation_summary(
         recommended_row_count: Number of selected food rows.
         dietary_preferences: Dietary toggle states.
     """
-    log.info(
-        "Rendering recommendation summary",
-        extra={"event": "ui.recommendation.summary"},
+    RECOMMENDATION_VIEW.render_recommendation_summary(
+        result,
+        recommended_row_count,
+        dietary_preferences,
     )
-    summary_cols = st.columns([1.0, 1.0, 1.2])
-
-    with summary_cols[0]:
-        st.markdown("### Picks")
-        st.markdown(f"## {recommended_row_count}")
-
-    with summary_cols[1]:
-        st.markdown("### Total Value")
-        if result.objective_value is None:
-            st.markdown("## n/a")
-        else:
-            st.markdown(f"## {result.objective_value:.2f}")
-
-    with summary_cols[2]:
-        st.markdown("### Solver Status")
-        st.markdown(f"## {result.status}")
-
-    active_preferences = [
-        label
-        for key, label in DIETARY_TOGGLE_LABELS
-        if dietary_preferences.get(key, False)
-    ]
-
-    if active_preferences:
-        st.write("Dietary filters enabled: " + ", ".join(active_preferences))
-    else:
-        st.write("Dietary filters enabled: none")
 
 
 def _render_recommended_foods(
     df: object,
     result: OptimizationResult,
     dietary_preferences: Dict[str, bool],
+    active_nutrient_columns: List[str],
+    bounds: SliderBounds,
 ) -> None:
     """
     Render ranked food recommendations with an expressive results layout.
@@ -524,242 +195,31 @@ def _render_recommended_foods(
         df: Candidate foods DataFrame returned by SQL query.
         result: Optimization result from the solver.
         dietary_preferences: Dietary toggle states.
+        active_nutrient_columns: Nutrient columns where Any is off.
+        bounds: Active nutrient bounds from current filter state.
     """
-    log.info("Rendering recommendations", extra={"event": "ui.recommendation.render"})
-    recommendation_df = df.copy()
-    recommendation_df["recommended_servings"] = result.servings
-    recommendation_df["value_contribution"] = (
-        recommendation_df["recommended_servings"] * recommendation_df["value"]
+    RECOMMENDATION_VIEW.render_recommended_foods(
+        df,
+        result,
+        dietary_preferences,
+        active_nutrient_columns=active_nutrient_columns,
+        nutrient_bounds=bounds,
     )
-
-    ranked_df = recommendation_df[
-        recommendation_df["recommended_servings"] > 1e-8
-    ].copy()
-    ranked_df = ranked_df.sort_values(
-        by=["value_contribution", "recommended_servings"],
-        ascending=False,
-    )
-
-    st.markdown("## Recommended Foods")
-    _render_recommendation_summary(result, len(ranked_df), dietary_preferences)
-
-    if ranked_df.empty:
-        st.warning("No feasible foods were selected from the current constraints.")
-        st.markdown("## Candidate Foods")
-        st.table(recommendation_df)
-        return
-
-    display_columns = [
-        "food_name",
-        "serving_size",
-        "recommended_servings",
-        "value",
-        "value_contribution",
-    ]
-    st.table(ranked_df[display_columns])
-
-    top_foods = ranked_df["food_name"].tolist()[:8]
-    st.write("Top picks: " + " | ".join(top_foods))
-
-    st.markdown("## Candidate Foods")
-    st.table(
-        recommendation_df[
-            [
-                "food_name",
-                "serving_size",
-                "value",
-                "recommended_servings",
-                "value_contribution",
-            ]
-        ]
-    )
-
-
-def _build_where_clauses(specs: List[NutrientSpec]) -> List[str]:
-    """
-    Build SQL filter clauses.
-
-    Args:
-        specs: Nutrient specifications.
-
-    Returns:
-        SQL predicate fragments.
-    """
-    query_log.info(
-        "Building nutrient SQL predicates", extra={"event": "query.sql.where_build"}
-    )
-    _ = specs
-    return ["1=1"]
-
-
-def _build_food_query(specs: List[NutrientSpec]) -> str:
-    """
-    Build the SQL query for the food table.
-
-    Args:
-        specs: Nutrient specifications.
-
-    Returns:
-        SQL query string.
-    """
-    query_log.info("Constructing food SQL query", extra={"event": "query.sql.build"})
-    where_sql = "\n        AND ".join(_build_where_clauses(specs))
-    return f"""
-        WITH nutrient_view AS (
-            SELECT
-                fdc_id,
-                "Value" AS value,
-                food_name,
-                serving_size,
-                "Energy [id:1008]" AS kilocalories,
-                "Total lipid (fat)" AS fat,
-                "Fatty acids, total saturated" AS saturated_fat,
-                COALESCE("Sugars, Total", "Total Sugars") AS sugar,
-                "Sodium, Na" AS sodium,
-                "Cholesterol" AS cholesterol,
-                "Protein" AS protein,
-                COALESCE(
-                    "Carbohydrate, by difference",
-                    "Carbohydrate, by summation"
-                ) AS carbs,
-                "Iron, Fe" AS iron,
-                "Calcium, Ca" AS calcium,
-                "Potassium, K" AS potassium,
-                "Fiber, total dietary" AS fiber,
-                "Vitamin A, RAE" AS vitamin_a,
-                "Thiamin" AS vitamin_b,
-                "Vitamin C, total ascorbic acid" AS vitamin_c,
-                "Vitamin D (D2 + D3)" AS vitamin_d,
-                "Vitamin E (alpha-tocopherol)" AS vitamin_e,
-                "Vitamin K (phylloquinone)" AS vitamin_k
-            FROM food_nutrients
-        )
-        SELECT
-            fdc_id,
-            value,
-            food_name,
-            serving_size,
-            kilocalories,
-            fat,
-            saturated_fat,
-            sugar,
-            sodium,
-            cholesterol,
-            protein,
-            carbs,
-            iron,
-            calcium,
-            potassium,
-            fiber,
-            vitamin_a,
-            vitamin_b,
-            vitamin_c,
-            vitamin_d,
-            vitamin_e,
-            vitamin_k
-        FROM nutrient_view
-        WHERE {where_sql}
-        ORDER BY protein DESC
-        LIMIT {QUERY_LIMIT}
-    """
-
-
-def _normalize_username(username: str) -> str:
-    """
-    Normalize usernames before lookup or creation.
-
-    Args:
-        username: Raw username input.
-
-    Returns:
-        Trimmed username.
-    """
-    auth_log.info(
-        "Normalizing username for authentication",
-        extra={"event": "auth.username_normalized"},
-    )
-    return username.strip()
-
-
-def _get_secret_login_map() -> dict[str, str]:
-    """
-    Return configured secret credentials as a plain dictionary.
-
-    Returns:
-        Secret credential mapping keyed by username.
-    """
-    auth_log.info(
-        "Loading credential mapping from Streamlit secrets",
-        extra={"event": "auth.secrets_lookup"},
-    )
-    login_map = st.secrets.get("passwords", {})
-
-    if login_map is None:
-        return {}
-
-    if not isinstance(login_map, Mapping):
-        log.error(
-            "Login credentials secret is not a mapping",
-            extra={
-                "event": "auth.secrets_invalid_type",
-                "value_type": type(login_map).__name__,
-            },
-        )
-        return {}
-
-    return {str(key): str(value) for key, value in login_map.items()}
 
 
 def credentials_match(username: str, password: str) -> bool:
     """
-    Validate a username and password pair from the login JSON mapping.
+    Validate a username and password pair.
 
     Args:
         username: The username entered by the user.
         password: The password entered by the user.
 
     Returns:
-        True when the username exists and the mapped password matches exactly.
+        True when credentials are accepted.
     """
-    auth_log.info(
-        "Login attempt started",
-        extra={"event": "auth.login_attempt", "username": username},
-    )
-    normalized_username = _normalize_username(username)
-
-    if not normalized_username or not password:
-        auth_log.warning(
-            "Login failed because required credentials were missing",
-            extra={
-                "event": "auth.login_invalid_input",
-                "username": normalized_username,
-            },
-        )
-        return False
-
-    stored_password_hash = get_user_password_hash(USER_DB_PATH, normalized_username)
-
-    if stored_password_hash is not None:
-        is_authenticated = password_matches(password, stored_password_hash)
-    else:
-        secret_login_map = _get_secret_login_map()
-        stored_secret_password = secret_login_map.get(normalized_username, "")
-        is_authenticated = password_matches(password, stored_secret_password)
-
-    auth_event = "auth.login_success" if is_authenticated else "auth.login_failed"
-
-    if is_authenticated:
-        auth_log.info(
-            "Login succeeded",
-            extra={"event": auth_event, "username": normalized_username},
-        )
-    else:
-        auth_log.warning(
-            "Login failed",
-            extra={"event": auth_event, "username": normalized_username},
-        )
-
-    return is_authenticated
+    AUTH_SERVICE.user_db_path = USER_DB_PATH
+    return AUTH_SERVICE.credentials_match(username, password)
 
 
 def create_account(username: str, password: str) -> bool:
@@ -773,108 +233,67 @@ def create_account(username: str, password: str) -> bool:
     Returns:
         True when the account is created successfully.
     """
-    normalized_username = _normalize_username(username)
-    auth_log.info(
-        "Signup attempt started",
-        extra={"event": "auth.signup_attempt", "username": normalized_username},
-    )
-
-    if not normalized_username:
-        st.error("Username is required")
-        return False
-
-    if not password.strip():
-        st.error("Password is required")
-        return False
-
-    if normalized_username in _get_secret_login_map():
-        st.error("Username already exists")
-        auth_log.warning(
-            "Signup failed because the username exists in Streamlit secrets",
-            extra={"event": "auth.signup_conflict", "username": normalized_username},
-        )
-        return False
-
-    if get_user_password_hash(USER_DB_PATH, normalized_username) is not None:
-        st.error("Username already exists")
-        auth_log.warning(
-            "Signup failed because the username exists in the local credential store",
-            extra={"event": "auth.signup_conflict", "username": normalized_username},
-        )
-        return False
-
-    if not create_user(USER_DB_PATH, normalized_username, password):
-        st.error("Username already exists")
-        return False
-
-    auth_log.info(
-        "Signup succeeded",
-        extra={"event": "auth.signup_success", "username": normalized_username},
-    )
-    return True
+    AUTH_SERVICE.user_db_path = USER_DB_PATH
+    return AUTH_SERVICE.create_account(username, password)
 
 
 def check_password() -> bool:
     """
     Validate user credentials using username and password.
 
-    Returns a boolean indicating whether the user has successfully authenticated.
+    Returns:
+        Whether the user has successfully authenticated.
     """
     log.info("Running login gate check", extra={"event": "auth.gate_check"})
-
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
+    if "login_attempting" not in st.session_state:
+        st.session_state.login_attempting = False
+    if st.session_state.authenticated:
+        return True
 
-    if not st.session_state.authenticated:
-        st.subheader("Login or Sign Up")
-        with st.form("auth_login_form", clear_on_submit=False):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            login_submitted = st.form_submit_button("Login")
+    st.subheader("Login or Sign Up")
+    with st.form("auth_login_form", clear_on_submit=False):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        is_loading = st.session_state.login_attempting
+        button_label = "Loading..." if is_loading else "Login"
+        login_submitted = st.form_submit_button(button_label, disabled=is_loading)
 
-        normalized_username = _normalize_username(username)
-
-        if login_submitted:
-            if credentials_match(username=username, password=password):
-                st.session_state.authenticated = True
-                st.session_state.current_username = normalized_username
-                st.rerun()
-            else:
-                st.error("Invalid username or password")
-                return False
-
-        if st.button("Sign Up"):
-            if create_account(username=username, password=password):
-                st.session_state.authenticated = True
-                st.session_state.current_username = normalized_username
-                st.rerun()
-            return False
-
+    normalized_username = AUTH_SERVICE.normalize_username(username)
+    if login_submitted:
+        st.session_state.login_attempting = True
+        if credentials_match(username=username, password=password):
+            st.session_state.authenticated = True
+            st.session_state.current_username = normalized_username
+            st.rerun()
+        else:
+            st.session_state.login_attempting = False
+            st.error("Invalid username or password")
         return False
 
-    return st.session_state.authenticated
+    if st.button("Sign Up"):
+        if create_account(username=username, password=password):
+            st.session_state.authenticated = True
+            st.session_state.current_username = normalized_username
+            st.rerun()
+        return False
+    return False
 
 
-if not check_password():
-    st.stop()
+def _run_food_query(
+    conn: object, dietary_preferences: Dict[str, bool]
+) -> Optional[object]:
+    """
+    Execute food query and return dataframe or None when failed.
 
-# 2. THE DATABASE CONNECTION
-# This connects to the URL you put in secrets.toml
-conn = st.connection("postgresql", type="sql")
+    Args:
+        conn: Streamlit SQL connection.
+        dietary_preferences: Dietary toggle states.
 
-st.title("Nutrient Goal Finder")
-dietary_preferences = _render_dietary_toggles()
-_ = dietary_preferences
-
-# 3. THE UI & ALGORITHM
-invalid_ranges: Dict[str, bool] = {}
-
-for nutrient in NUTRIENT_SPECS:
-    invalid_ranges[nutrient.key] = _render_nutrient_filter(nutrient)
-
-has_invalid_ranges = any(invalid_ranges.values())
-
-if st.button("Find Foods", disabled=has_invalid_ranges):
+    Returns:
+        DataFrame when query succeeds, otherwise None.
+    """
     query_log.info(
         "Food query started",
         extra={
@@ -882,15 +301,22 @@ if st.button("Find Foods", disabled=has_invalid_ranges):
             "active_dietary_filters": sum(
                 int(enabled) for enabled in dietary_preferences.values()
             ),
-            "invalid_ranges": has_invalid_ranges,
         },
     )
     started_at = time.perf_counter()
-
-    query = _build_food_query(NUTRIENT_SPECS)
-
     try:
+        query = _build_food_query(NUTRIENT_SPECS)
         df = conn.query(query)
+        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        query_log.info(
+            "Food query succeeded",
+            extra={
+                "event": "db.query_succeeded",
+                "duration_ms": duration_ms,
+                "row_count": len(df),
+            },
+        )
+        return df
     except Exception:
         duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
         query_log.exception(
@@ -898,28 +324,37 @@ if st.button("Find Foods", disabled=has_invalid_ranges):
             extra={"event": "db.query_failed", "duration_ms": duration_ms},
         )
         st.error("Unable to fetch foods. Please try again.")
-        st.stop()
+        return None
 
-    duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
-    query_log.info(
-        "Food query succeeded",
-        extra={
-            "event": "db.query_succeeded",
-            "duration_ms": duration_ms,
-            "row_count": len(df),
-        },
-    )
 
-    if len(df) == 0:
-        st.warning("No foods matched the selected filters.")
-        st.stop()
+def _run_optimization(
+    df: object,
+    bounds: SliderBounds,
+    max_servings_per_food: float,
+) -> Optional[OptimizationResult]:
+    """
+    Run the optimizer with current slider bounds.
 
-    optimization_result: Optional[OptimizationResult] = None
+    Args:
+        df: Food candidate dataframe.
 
+    Returns:
+        Optimization result, or None when optimization fails.
+    """
     try:
-        bounds = _build_slider_bounds(NUTRIENT_SPECS)
-        optimizer = Simplex(df, bounds)
-        optimization_result = optimizer.run()
+        log.info(
+            "Starting optimization",
+            extra={
+                "event": "optimizer.started",
+                "max_servings_per_food": max_servings_per_food,
+            },
+        )
+        optimizer = Simplex(
+            df,
+            bounds,
+            max_servings_per_food=max_servings_per_food,
+        )
+        return optimizer.run()
     except Exception:
         query_log.exception(
             "Optimization failed",
@@ -927,6 +362,80 @@ if st.button("Find Foods", disabled=has_invalid_ranges):
         )
         st.error("Unable to compute recommendations. Showing candidate foods instead.")
         st.table(df)
+        return None
 
+
+def run_app() -> None:
+    """
+    Execute the Streamlit nutrient finder workflow.
+    """
+    if not check_password():
+        st.stop()
+    conn = st.connection("postgresql", type="sql")
+    st.title("Nutrient Goal Finder")
+    dietary_preferences = _render_dietary_toggles()
+
+    max_servings_per_food = st.selectbox(
+        "Max servings per food:",
+        options=[round(value * 0.5, 1) for value in range(1, 21)],
+        index=7,
+        key="max_servings_per_food",
+    )
+
+    invalid_ranges = FILTER_PANEL.render_all_nutrients(NUTRIENT_SPECS)
+    has_invalid_ranges = any(invalid_ranges.values())
+    if not st.button("Find Foods", disabled=has_invalid_ranges):
+        return
+
+    log.info(
+        "Find Foods button clicked",
+        extra={
+            "event": "find_foods.clicked",
+            "max_servings_per_food": max_servings_per_food,
+        },
+    )
+
+    bounds = _build_slider_bounds(NUTRIENT_SPECS)
+    active_nutrient_columns = [
+        spec.db_column
+        for spec in NUTRIENT_SPECS
+        if any(
+            value is not None
+            for value in (
+                bounds.minimums.get(spec.db_column),
+                bounds.maximums.get(spec.db_column),
+            )
+        )
+    ]
+
+    df = _run_food_query(conn, dietary_preferences)
+    if df is None:
+        st.stop()
+    if len(df) == 0:
+        st.warning("No foods matched the selected filters.")
+        st.stop()
+
+    with st.spinner("Computing recommendations..."):
+        optimization_result = _run_optimization(
+            df,
+            bounds,
+            max_servings_per_food,
+        )
     if optimization_result is not None:
-        _render_recommended_foods(df, optimization_result, dietary_preferences)
+        log.info(
+            "Optimization completed",
+            extra={
+                "event": "optimization.completed",
+                "selected_foods_count": len(optimization_result.selected_foods),
+            },
+        )
+        _render_recommended_foods(
+            df,
+            optimization_result,
+            dietary_preferences,
+            active_nutrient_columns,
+            bounds,
+        )
+
+
+run_app()

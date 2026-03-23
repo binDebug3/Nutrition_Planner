@@ -55,9 +55,16 @@ class Simplex:
     """
 
     _VALUE_COLUMN = "value"
+    _VALUE_COLUMN_FALLBACK = "Value"
     _NAME_COLUMN = "food_name"
+    _DEFAULT_MAX_SERVINGS_PER_FOOD = 4.0
 
-    def __init__(self, data: pd.DataFrame, bounds: SliderBounds) -> None:
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        bounds: SliderBounds,
+        max_servings_per_food: float = _DEFAULT_MAX_SERVINGS_PER_FOOD,
+    ) -> None:
         """
         Normalize incoming data and bounds for optimization.
 
@@ -73,17 +80,23 @@ class Simplex:
         if data.empty:
             raise ValueError("Input data must contain at least one food row.")
 
-        if self._VALUE_COLUMN not in data.columns:
+        if self._VALUE_COLUMN in data.columns:
+            value_column = self._VALUE_COLUMN
+        elif self._VALUE_COLUMN_FALLBACK in data.columns:
+            value_column = self._VALUE_COLUMN_FALLBACK
+        else:
             raise ValueError("Input data must include a value column.")
 
         if self._NAME_COLUMN not in data.columns:
             raise ValueError("Input data must include a food_name column.")
 
         self.data = data.copy()
+        self.value_column = value_column
         self.bounds = bounds
+        self.max_servings_per_food = max(0.1, float(max_servings_per_food))
         self.food_names = [str(name) for name in self.data[self._NAME_COLUMN].tolist()]
         self.value_vector = (
-            pd.to_numeric(self.data[self._VALUE_COLUMN], errors="coerce")
+            pd.to_numeric(self.data[self.value_column], errors="coerce")
             .fillna(0.0)
             .to_numpy(dtype=float)
         )
@@ -164,6 +177,15 @@ class Simplex:
         servings = cp.Variable(len(self.food_names), nonneg=True)
         objective = cp.Maximize(self.value_vector @ servings)
         constraints = []
+
+        constraints.append(servings <= self.max_servings_per_food)
+        log.info(
+            "Applied per-food serving cap",
+            extra={
+                "event": "optimizer.serving_cap",
+                "max_servings_per_food": self.max_servings_per_food,
+            },
+        )
 
         for index, nutrient_name in enumerate(self.nutrient_columns):
             nutrient_values = self.nutrient_matrix[:, index]

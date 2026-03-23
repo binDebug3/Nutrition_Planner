@@ -1,0 +1,317 @@
+"""Authentication service for Streamlit login and signup flows."""
+
+from pathlib import Path
+from typing import Mapping
+
+from auth_store import create_user, get_user_password_hash, password_matches
+
+
+class AuthService:
+    """
+    Authenticate and create users using local DB and Streamlit secrets.
+
+    Args:
+        streamlit_module: Streamlit module or fake module in tests.
+        auth_logger: Logger for authentication events.
+        app_logger: Logger for app-level authentication events.
+        user_db_path: Path to local user database.
+    """
+
+    def __init__(
+        self,
+        streamlit_module: object,
+        auth_logger: object,
+        app_logger: object,
+        user_db_path: Path,
+    ) -> None:
+        """
+        Initialize dependencies for authentication operations.
+
+        Args:
+            streamlit_module: Streamlit module-like object.
+            auth_logger: Auth-specific logger.
+            app_logger: App-level logger.
+            user_db_path: Path to sqlite user database.
+        """
+        self._st = streamlit_module
+        self._auth_log = auth_logger
+        self._log = app_logger
+        self.user_db_path = user_db_path
+
+    def normalize_username(self, username: str) -> str:
+        """
+        Normalize usernames before lookup or creation.
+
+        Args:
+            username: Raw username input.
+
+        Returns:
+            Trimmed username.
+        """
+        self._auth_log.info(
+            "Normalizing username for authentication",
+            extra={"event": "auth.username_normalized"},
+        )
+        return username.strip()
+
+    def get_secret_login_map(self) -> dict[str, str]:
+        """
+        Return configured secret credentials as a plain dictionary.
+
+        Returns:
+            Secret credential mapping keyed by username.
+        """
+        self._auth_log.info(
+            "Loading credential mapping from Streamlit secrets",
+            extra={"event": "auth.secrets_lookup"},
+        )
+        login_map = self._st.secrets.get("passwords", {})
+        if login_map is None:
+            return {}
+        if not isinstance(login_map, Mapping):
+            self._log.error(
+                "Login credentials secret is not a mapping",
+                extra={
+                    "event": "auth.secrets_invalid_type",
+                    "value_type": type(login_map).__name__,
+                },
+            )
+            return {}
+        return {str(key): str(value) for key, value in login_map.items()}
+
+    def credentials_match(self, username: str, password: str) -> bool:
+        """
+        Validate a username and password pair.
+
+        Args:
+            username: Username entered by the user.
+            password: Password entered by the user.
+
+        Returns:
+            True when credentials are accepted.
+        """
+        self._auth_log.info(
+            "Login attempt started",
+            extra={"event": "auth.login_attempt", "username": username},
+        )
+        normalized_username = self.normalize_username(username)
+        if not normalized_username or not password:
+            self._auth_log.warning(
+                "Login failed because required credentials were missing",
+                extra={
+                    "event": "auth.login_invalid_input",
+                    "username": normalized_username,
+                },
+            )
+            return False
+        stored_password_hash = get_user_password_hash(
+            self.user_db_path, normalized_username
+        )
+        if stored_password_hash is not None:
+            is_authenticated = password_matches(password, stored_password_hash)
+        else:
+            secret_login_map = self.get_secret_login_map()
+            stored_secret_password = secret_login_map.get(normalized_username, "")
+            is_authenticated = password_matches(password, stored_secret_password)
+        self._log_auth_result(normalized_username, is_authenticated)
+        return is_authenticated
+
+    def create_account(self, username: str, password: str) -> bool:
+        """
+        Create a new user account in the local credential store.
+
+        Args:
+            username: Requested username.
+            password: Requested password.
+
+        Returns:
+            True when the account is created successfully.
+        """
+        normalized_username = self.normalize_username(username)
+        self._auth_log.info(
+            "Signup attempt started",
+            extra={"event": "auth.signup_attempt", "username": normalized_username},
+        )
+        if not self._validate_signup_input(normalized_username, password):
+            return False
+        if self._username_exists(normalized_username):
+            return False
+        if not create_user(self.user_db_path, normalized_username, password):
+            self._st.error("Username already exists")
+            return False
+        self._auth_log.info(
+            "Signup succeeded",
+            extra={"event": "auth.signup_success", "username": normalized_username},
+        )
+        return True
+
+    def check_password(self) -> bool:
+        """
+        Validate user credentials using username and password.
+
+        Returns:
+            Whether the user is authenticated.
+        """
+        self._log.info("Running login gate check", extra={"event": "auth.gate_check"})
+        if "authenticated" not in self._st.session_state:
+            self._st.session_state.authenticated = False
+        if self._st.session_state.authenticated:
+            return True
+
+        username, password, login_submitted = self._render_auth_form()
+        normalized_username = self.normalize_username(username)
+        if login_submitted:
+            return self._handle_login_submit(username, password, normalized_username)
+        if self._st.button("Sign Up"):
+            return self._handle_signup_submit(username, password, normalized_username)
+        return False
+
+    def _validate_signup_input(self, normalized_username: str, password: str) -> bool:
+        """
+        Validate required signup inputs.
+
+        Args:
+            normalized_username: Trimmed username.
+            password: Raw password text.
+
+        Returns:
+            True when required fields are valid.
+        """
+        self._auth_log.info(
+            "Validating signup input", extra={"event": "auth.signup_validate"}
+        )
+        if not normalized_username:
+            self._st.error("Username is required")
+            return False
+        if not password.strip():
+            self._st.error("Password is required")
+            return False
+        return True
+
+    def _username_exists(self, normalized_username: str) -> bool:
+        """
+        Check whether a username exists in secrets or local store.
+
+        Args:
+            normalized_username: Trimmed username.
+
+        Returns:
+            True when the username already exists.
+        """
+        self._auth_log.info(
+            "Checking username uniqueness",
+            extra={"event": "auth.signup_uniqueness", "username": normalized_username},
+        )
+        if normalized_username in self.get_secret_login_map():
+            self._st.error("Username already exists")
+            self._auth_log.warning(
+                "Signup failed because the username exists in Streamlit secrets",
+                extra={
+                    "event": "auth.signup_conflict",
+                    "username": normalized_username,
+                },
+            )
+            return True
+
+        if get_user_password_hash(self.user_db_path, normalized_username) is not None:
+            self._st.error("Username already exists")
+            self._auth_log.warning(
+                "Signup failed because the username exists in the local credential store",
+                extra={
+                    "event": "auth.signup_conflict",
+                    "username": normalized_username,
+                },
+            )
+            return True
+        return False
+
+    def _log_auth_result(
+        self, normalized_username: str, is_authenticated: bool
+    ) -> None:
+        """
+        Log the outcome of an authentication attempt.
+
+        Args:
+            normalized_username: Trimmed username.
+            is_authenticated: Whether auth succeeded.
+        """
+        auth_event = "auth.login_success" if is_authenticated else "auth.login_failed"
+        if is_authenticated:
+            self._auth_log.info(
+                "Login succeeded",
+                extra={"event": auth_event, "username": normalized_username},
+            )
+        else:
+            self._auth_log.warning(
+                "Login failed",
+                extra={"event": auth_event, "username": normalized_username},
+            )
+
+    def _render_auth_form(self) -> tuple[str, str, bool]:
+        """
+        Render login form and return entered credentials.
+
+        Returns:
+            Username, password, and submit state.
+        """
+        self._auth_log.info("Rendering auth form", extra={"event": "auth.form_render"})
+        self._st.subheader("Login or Sign Up")
+        with self._st.form("auth_login_form", clear_on_submit=False):
+            username = self._st.text_input("Username")
+            password = self._st.text_input("Password", type="password")
+            login_submitted = self._st.form_submit_button("Login")
+        return username, password, login_submitted
+
+    def _handle_login_submit(
+        self,
+        username: str,
+        password: str,
+        normalized_username: str,
+    ) -> bool:
+        """
+        Process login form submission.
+
+        Args:
+            username: Raw username.
+            password: Raw password.
+            normalized_username: Trimmed username.
+
+        Returns:
+            False because a rerun is requested on success.
+        """
+        self._auth_log.info(
+            "Processing login submit", extra={"event": "auth.login_submit"}
+        )
+        if self.credentials_match(username=username, password=password):
+            self._st.session_state.authenticated = True
+            self._st.session_state.current_username = normalized_username
+            self._st.rerun()
+        else:
+            self._st.error("Invalid username or password")
+        return False
+
+    def _handle_signup_submit(
+        self,
+        username: str,
+        password: str,
+        normalized_username: str,
+    ) -> bool:
+        """
+        Process signup button submission.
+
+        Args:
+            username: Raw username.
+            password: Raw password.
+            normalized_username: Trimmed username.
+
+        Returns:
+            False because a rerun is requested on success.
+        """
+        self._auth_log.info(
+            "Processing signup submit", extra={"event": "auth.signup_submit"}
+        )
+        if self.create_account(username=username, password=password):
+            self._st.session_state.authenticated = True
+            self._st.session_state.current_username = normalized_username
+            self._st.rerun()
+        return False
