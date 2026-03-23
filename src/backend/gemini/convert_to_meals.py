@@ -16,7 +16,9 @@ from typing import Mapping, Protocol, Sequence
 MODULE_PATH = Path(__file__).resolve()
 REPO_ROOT = MODULE_PATH.parents[3]
 DIETETICS_ROOT = REPO_ROOT.parent
-DEFAULT_PROMPT_PATH = REPO_ROOT / "src" / "backend" / "gemini" / "prompts" / "convert_to_meals.txt"
+DEFAULT_PROMPT_PATH = (
+    REPO_ROOT / "src" / "backend" / "gemini" / "prompts" / "convert_to_meals.txt"
+)
 DEFAULT_SECRETS_PATH = (
     REPO_ROOT / "src" / "frontend" / "app" / ".streamlit" / "secrets.toml"
 )
@@ -85,10 +87,51 @@ def load_prompt(prompt_path: Path = DEFAULT_PROMPT_PATH) -> str:
     return prompt_text
 
 
+def load_runtime_streamlit_secrets() -> Mapping[str, object] | None:
+    """Load secrets from the active Streamlit runtime when available.
+
+    Returns:
+        Streamlit runtime secrets mapping, or None when unavailable.
+    """
+    log.info("Attempting to load Streamlit runtime secrets")
+
+    try:
+        import streamlit as st
+    except ModuleNotFoundError:
+        return None
+    except Exception as error:
+        log.warning(
+            "Failed to import Streamlit while resolving runtime secrets",
+            extra={"error": str(error)},
+        )
+        return None
+
+    try:
+        runtime_secrets = st.secrets
+    except Exception as error:
+        log.warning(
+            "Failed to access Streamlit runtime secrets",
+            extra={"error": str(error)},
+        )
+        return None
+
+    if isinstance(runtime_secrets, Mapping):
+        return runtime_secrets
+
+    try:
+        return dict(runtime_secrets)
+    except Exception as error:
+        log.warning(
+            "Streamlit runtime secrets are not mapping-compatible",
+            extra={"error": str(error)},
+        )
+        return None
+
+
 def load_streamlit_secrets(
     secrets_path: Path = DEFAULT_SECRETS_PATH,
 ) -> Mapping[str, object]:
-    """Load Streamlit secrets from the frontend TOML file.
+    """Load Streamlit secrets from file or the active Streamlit runtime.
 
     Args:
         secrets_path: Absolute path to the Streamlit secrets TOML file.
@@ -97,16 +140,28 @@ def load_streamlit_secrets(
         Parsed Streamlit secrets mapping.
 
     Raises:
-        FileNotFoundError: If the secrets file path does not exist.
+        FileNotFoundError: If neither the secrets file nor runtime secrets exist.
         ValueError: If the secrets file does not contain a TOML object.
     """
-    log.info("Loading Streamlit secrets file", extra={"path": str(secrets_path)})
+    log.info("Loading Streamlit secrets", extra={"path": str(secrets_path)})
 
-    secrets_text = secrets_path.read_text(encoding="utf-8")
-    secrets = tomllib.loads(secrets_text)
-    if not isinstance(secrets, dict):
-        raise ValueError(f"Streamlit secrets file is not a TOML object: {secrets_path}")
-    return secrets
+    if secrets_path.exists():
+        secrets_text = secrets_path.read_text(encoding="utf-8")
+        secrets = tomllib.loads(secrets_text)
+        if not isinstance(secrets, dict):
+            raise ValueError(
+                f"Streamlit secrets file is not a TOML object: {secrets_path}"
+            )
+        return secrets
+
+    runtime_secrets = load_runtime_streamlit_secrets()
+    if runtime_secrets is not None:
+        return runtime_secrets
+
+    raise FileNotFoundError(
+        "Streamlit secrets file not found and runtime secrets are unavailable: "
+        f"{secrets_path}"
+    )
 
 
 def load_api_key(secrets_path: Path = DEFAULT_SECRETS_PATH) -> str:

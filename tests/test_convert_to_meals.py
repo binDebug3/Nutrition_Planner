@@ -122,6 +122,49 @@ def test_load_api_key_reads_top_level_secret_fallback(
     assert api_key == "top-level-key"
 
 
+def test_load_api_key_reads_streamlit_runtime_secrets_when_file_missing(
+    load_module: object,
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    """Use runtime Streamlit secrets when hosted deployments lack a local file."""
+    module = load_module(
+        "test_backend_gemini_convert_runtime_secret", GEMINI_CONVERT_PATH
+    )
+    secrets_path = tmp_path / "missing-secrets.toml"
+
+    fake_streamlit = types.ModuleType("streamlit")
+    fake_streamlit.secrets = {"gemini": {"api_key": "runtime-key"}}
+
+    monkeypatch.setitem(__import__("sys").modules, "streamlit", fake_streamlit)
+
+    api_key = module.load_api_key(secrets_path)
+
+    assert api_key == "runtime-key"
+
+
+def test_load_streamlit_secrets_raises_when_file_and_runtime_are_missing(
+    load_module: object,
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    """Raise a clear file error when no file or runtime secrets are available."""
+    module = load_module(
+        "test_backend_gemini_convert_missing_runtime_secret", GEMINI_CONVERT_PATH
+    )
+    secrets_path = tmp_path / "missing-secrets.toml"
+
+    monkeypatch.setattr(module, "load_runtime_streamlit_secrets", lambda: None)
+
+    try:
+        module.load_streamlit_secrets(secrets_path)
+        assert False, (
+            "Expected FileNotFoundError when no Streamlit secrets source exists."
+        )
+    except FileNotFoundError as exc:
+        assert "runtime secrets are unavailable" in str(exc)
+
+
 def test_load_api_key_raises_when_secret_is_missing(
     load_module: object,
     tmp_path: Path,
