@@ -3,12 +3,13 @@
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Mapping, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 import streamlit as st
 
 from auth_store import create_user, get_user_password_hash, password_matches
 from logging_setup import configure_app_logging
+from optimize import OptimizationResult, Simplex, SliderBounds
 
 
 APP_PATH = Path(__file__).resolve()
@@ -82,7 +83,7 @@ NUTRIENT_SPECS: List[NutrientSpec] = [
         (0.0, 300.0),
         (0.0, 75.0),
     ),
-    NutrientSpec("protein", "Protein", "Protein", (0.0, 100.0), (10.0, 60.0)),
+    NutrientSpec("protein", "Protein", "protein", (0.0, 100.0), (10.0, 60.0)),
     NutrientSpec(
         "carbs",
         "Carbs",
@@ -432,6 +433,148 @@ def _format_sql_number(value: float) -> str:
     return f"{value:.4f}".rstrip("0").rstrip(".")
 
 
+def _build_slider_bounds(specs: List[NutrientSpec]) -> SliderBounds:
+    """
+    Build optimization bounds from current nutrient slider controls.
+
+    Args:
+        specs: Nutrient specifications.
+
+    Returns:
+        Dataclass containing per-nutrient min and max limits.
+    """
+    log.info("Building optimization bounds", extra={"event": "optimizer.bounds.build"})
+    minimums: Dict[str, float | None] = {}
+    maximums: Dict[str, float | None] = {}
+
+    for spec in specs:
+        column_name = spec.db_column
+        if st.session_state.get(_any_key(spec), False):
+            minimums[column_name] = None
+            maximums[column_name] = None
+            continue
+
+        minimums[column_name] = _coerce_float(
+            st.session_state.get(_min_key(spec)),
+            spec.defaults[0],
+        )
+        maximums[column_name] = _coerce_float(
+            st.session_state.get(_max_key(spec)),
+            spec.defaults[1],
+        )
+
+    return SliderBounds(minimums=minimums, maximums=maximums)
+
+
+def _render_recommendation_summary(
+    result: OptimizationResult,
+    recommended_row_count: int,
+    dietary_preferences: Dict[str, bool],
+) -> None:
+    """
+    Render high-level recommendation metrics and active dietary preferences.
+
+    Args:
+        result: Optimization result from the solver.
+        recommended_row_count: Number of selected food rows.
+        dietary_preferences: Dietary toggle states.
+    """
+    log.info(
+        "Rendering recommendation summary",
+        extra={"event": "ui.recommendation.summary"},
+    )
+    summary_cols = st.columns([1.0, 1.0, 1.2])
+
+    with summary_cols[0]:
+        st.markdown("### Picks")
+        st.markdown(f"## {recommended_row_count}")
+
+    with summary_cols[1]:
+        st.markdown("### Total Value")
+        if result.objective_value is None:
+            st.markdown("## n/a")
+        else:
+            st.markdown(f"## {result.objective_value:.2f}")
+
+    with summary_cols[2]:
+        st.markdown("### Solver Status")
+        st.markdown(f"## {result.status}")
+
+    active_preferences = [
+        label
+        for key, label in DIETARY_TOGGLE_LABELS
+        if dietary_preferences.get(key, False)
+    ]
+
+    if active_preferences:
+        st.write("Dietary filters enabled: " + ", ".join(active_preferences))
+    else:
+        st.write("Dietary filters enabled: none")
+
+
+def _render_recommended_foods(
+    df: object,
+    result: OptimizationResult,
+    dietary_preferences: Dict[str, bool],
+) -> None:
+    """
+    Render ranked food recommendations with an expressive results layout.
+
+    Args:
+        df: Candidate foods DataFrame returned by SQL query.
+        result: Optimization result from the solver.
+        dietary_preferences: Dietary toggle states.
+    """
+    log.info("Rendering recommendations", extra={"event": "ui.recommendation.render"})
+    recommendation_df = df.copy()
+    recommendation_df["recommended_servings"] = result.servings
+    recommendation_df["value_contribution"] = (
+        recommendation_df["recommended_servings"] * recommendation_df["Value"]
+    )
+
+    ranked_df = recommendation_df[
+        recommendation_df["recommended_servings"] > 1e-8
+    ].copy()
+    ranked_df = ranked_df.sort_values(
+        by=["value_contribution", "recommended_servings"],
+        ascending=False,
+    )
+
+    st.markdown("## Recommended Foods")
+    _render_recommendation_summary(result, len(ranked_df), dietary_preferences)
+
+    if ranked_df.empty:
+        st.warning("No feasible foods were selected from the current constraints.")
+        st.markdown("## Candidate Foods")
+        st.table(recommendation_df)
+        return
+
+    display_columns = [
+        "food_name",
+        "serving_size",
+        "recommended_servings",
+        "Value",
+        "value_contribution",
+    ]
+    st.table(ranked_df[display_columns])
+
+    top_foods = ranked_df["food_name"].tolist()[:8]
+    st.write("Top picks: " + " | ".join(top_foods))
+
+    st.markdown("## Candidate Foods")
+    st.table(
+        recommendation_df[
+            [
+                "food_name",
+                "serving_size",
+                "Value",
+                "recommended_servings",
+                "value_contribution",
+            ]
+        ]
+    )
+
+
 def _build_where_clauses(specs: List[NutrientSpec]) -> List[str]:
     """
     Build SQL filter clauses from nutrient selections.
@@ -483,6 +626,7 @@ def _build_food_query(specs: List[NutrientSpec]) -> str:
         WITH nutrient_view AS (
             SELECT
                 fdc_id,
+                "Value" AS Value,
                 food_name,
                 serving_size,
                 "Energy [id:1008]" AS kilocalories,
@@ -785,4 +929,24 @@ if st.button("Find Foods", disabled=has_invalid_ranges):
             "row_count": len(df),
         },
     )
-    st.table(df)
+
+    if len(df) == 0:
+        st.warning("No foods matched the selected filters.")
+        st.stop()
+
+    optimization_result: Optional[OptimizationResult] = None
+
+    try:
+        bounds = _build_slider_bounds(NUTRIENT_SPECS)
+        optimizer = Simplex(df, bounds)
+        optimization_result = optimizer.run()
+    except Exception:
+        query_log.exception(
+            "Optimization failed",
+            extra={"event": "optimizer.failed", "row_count": len(df)},
+        )
+        st.error("Unable to compute recommendations. Showing candidate foods instead.")
+        st.table(df)
+
+    if optimization_result is not None:
+        _render_recommended_foods(df, optimization_result, dietary_preferences)
