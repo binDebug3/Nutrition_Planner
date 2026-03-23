@@ -44,11 +44,11 @@ def _load_optimize_module(load_module: object) -> ModuleType:
     )
 
 
-def test_render_recommended_foods_shows_ranked_and_candidate_tables(
+def test_render_recommended_foods_shows_ranked_table_only(
     load_module: object,
     fake_streamlit: ModuleType,
 ) -> None:
-    """Render ranked output and candidate table when positive servings exist."""
+    """Render ranked output when positive servings exist."""
     recommendation_module = _load_recommendation_view_module(load_module)
     optimize_module = _load_optimize_module(load_module)
     view = recommendation_module.RecommendationView(
@@ -72,7 +72,7 @@ def test_render_recommended_foods_shows_ranked_and_candidate_tables(
 
     view.render_recommended_foods(df, result, {"vegan": True})
 
-    assert len(fake_streamlit.tables) == 2
+    assert len(fake_streamlit.tables) == 1
     assert any(
         isinstance(message, str) and "Top picks: B" in message
         for message in fake_streamlit.writes
@@ -83,7 +83,7 @@ def test_render_recommended_foods_shows_empty_state_when_no_selection(
     load_module: object,
     fake_streamlit: ModuleType,
 ) -> None:
-    """Render warning and candidate table when optimizer selects no foods."""
+    """Render warning without any recommendation tables when no foods are selected."""
     recommendation_module = _load_recommendation_view_module(load_module)
     optimize_module = _load_optimize_module(load_module)
     view = recommendation_module.RecommendationView(
@@ -111,4 +111,4 @@ def test_render_recommended_foods_shows_empty_state_when_no_selection(
         "No feasible foods were selected" in warning
         for warning in fake_streamlit.warnings
     )
-    assert len(fake_streamlit.tables) == 1
+    assert len(fake_streamlit.tables) == 0

@@ -58,6 +58,7 @@ class Simplex:
     _VALUE_COLUMN_FALLBACK = "Value"
     _NAME_COLUMN = "food_name"
     _DEFAULT_MAX_SERVINGS_PER_FOOD = 4.0
+    _MIN_OUTPUT_SERVINGS = 0.3
 
     def __init__(
         self,
@@ -212,15 +213,28 @@ class Simplex:
             else np.zeros(len(self.food_names), dtype=float)
         )
 
+        solved_servings = np.where(
+            solved_servings > self._MIN_OUTPUT_SERVINGS,
+            solved_servings,
+            0.0,
+        )
+        log.info(
+            "Applied minimum serving threshold",
+            extra={
+                "event": "optimizer.minimum_serving_threshold",
+                "minimum_servings": self._MIN_OUTPUT_SERVINGS,
+            },
+        )
+
         selected_foods = [
             food_name
             for food_name, servings_value in zip(self.food_names, solved_servings)
-            if servings_value > 1e-8
+            if servings_value > self._MIN_OUTPUT_SERVINGS
         ]
 
         objective_value = (
-            float(problem.value)
-            if problem.value is not None and np.isfinite(problem.value)
+            float(self.value_vector @ solved_servings)
+            if np.isfinite(self.value_vector @ solved_servings)
             else None
         )
 

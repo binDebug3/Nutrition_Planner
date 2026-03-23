@@ -18,6 +18,23 @@ MAX_LOG_FILE_BYTES = 5 * 1024 * 1024
 BACKUP_LOG_FILE_COUNT = 5
 
 
+class SafeRotatingFileHandler(RotatingFileHandler):
+    """Rotating file handler that tolerates Windows file-lock rollover failures."""
+
+    def doRollover(self) -> None:
+        """Attempt rollover and recover when the log file is temporarily locked.
+
+        On Windows, another process can briefly lock the file when Streamlit
+        hot-reloads, causing PermissionError during rename. In that case,
+        reopen the stream and continue writing without rotating.
+        """
+        try:
+            super().doRollover()
+        except PermissionError:
+            if self.stream is None:
+                self.stream = self._open()
+
+
 class JsonLogFormatter(logging.Formatter):
     """Render log records as JSON lines for easy filtering and analysis."""
 
@@ -88,7 +105,7 @@ def _build_rotating_file_handler(log_file_path: Path) -> RotatingFileHandler:
     Returns:
         Configured rotating file handler.
     """
-    file_handler = RotatingFileHandler(
+    file_handler = SafeRotatingFileHandler(
         log_file_path,
         maxBytes=MAX_LOG_FILE_BYTES,
         backupCount=BACKUP_LOG_FILE_COUNT,

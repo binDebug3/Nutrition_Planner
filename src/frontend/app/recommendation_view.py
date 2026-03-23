@@ -76,7 +76,7 @@ class RecommendationView:
         nutrient_bounds: Optional[SliderBounds] = None,
     ) -> None:
         """
-        Render ranked food recommendations with candidate fallback.
+        Render ranked food recommendations.
 
         Args:
             df: Candidate foods DataFrame returned by SQL query.
@@ -95,7 +95,7 @@ class RecommendationView:
         self.render_recommendation_summary(result, len(ranked_df), dietary_preferences)
 
         if ranked_df.empty:
-            self._render_empty_state(recommendation_df)
+            self._render_empty_state()
             return
 
         self._render_ranked_table(
@@ -107,7 +107,6 @@ class RecommendationView:
         safe_markdown(self._st, "<div class='top-picks'>", unsafe_html=True)
         self._st.write("Top picks: " + " | ".join(top_foods))
         safe_markdown(self._st, "</div>", unsafe_html=True)
-        self._render_candidate_table(recommendation_df)
 
     def render_meal_suggestions(self, meal_markdown: str) -> None:
         """Render AI-generated meal suggestions below recommendation tables.
@@ -243,12 +242,9 @@ class RecommendationView:
         else:
             self._st.write("Dietary filters enabled: none")
 
-    def _render_empty_state(self, recommendation_df: object) -> None:
+    def _render_empty_state(self) -> None:
         """
         Render UI when optimization selected no foods.
-
-        Args:
-            recommendation_df: Candidate dataframe with derived columns.
         """
         self._log.info(
             "Rendering empty recommendation state",
@@ -257,8 +253,6 @@ class RecommendationView:
         self._st.warning(
             "No feasible foods were selected from the current constraints."
         )
-        self._st.markdown("## Candidate Foods")
-        self._st.table(recommendation_df)
 
     def _render_ranked_table(
         self,
@@ -370,29 +364,3 @@ class RecommendationView:
         summary_df = pd.DataFrame(summary_rows)
         summary_df = summary_df.astype(str)
         return summary_df
-
-    def _render_candidate_table(self, recommendation_df: object) -> None:
-        """
-        Render complete candidate table beneath ranked recommendations.
-
-        Args:
-            recommendation_df: Candidate dataframe with derived columns.
-        """
-        self._log.info(
-            "Rendering candidate recommendation table",
-            extra={"event": "ui.recommendation.table_candidates"},
-        )
-        self._st.markdown("## Candidate Foods")
-        safe_markdown(self._st, "<div class='app-surface'>", unsafe_html=True)
-        self._st.table(
-            recommendation_df[
-                [
-                    "food_name",
-                    "serving_size",
-                    "value",
-                    "recommended_servings",
-                    "value_contribution",
-                ]
-            ]
-        )
-        safe_markdown(self._st, "</div>", unsafe_html=True)

@@ -58,7 +58,7 @@ def test_initialize_nutrient_state_seeds_all_keys(
 
     manager.initialize_nutrient_state(protein_spec)
 
-    assert fake_streamlit.session_state[manager.any_key(protein_spec)] is False
+    assert fake_streamlit.session_state[manager.any_key(protein_spec)] is True
     assert fake_streamlit.session_state[manager.slider_key(protein_spec)] == (
         10.0,
         60.0,

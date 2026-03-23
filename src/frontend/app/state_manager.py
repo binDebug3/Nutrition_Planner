@@ -36,7 +36,7 @@ class NutrientStateManager:
         Returns:
             Session-state key.
         """
-        self._log.info(
+        self._log.debug(
             "Building Any toggle key",
             extra={"event": "ui.key.any", "nutrient": spec.key},
         )
@@ -52,7 +52,7 @@ class NutrientStateManager:
         Returns:
             Session-state key.
         """
-        self._log.info(
+        self._log.debug(
             "Building slider key",
             extra={"event": "ui.key.slider", "nutrient": spec.key},
         )
@@ -68,7 +68,7 @@ class NutrientStateManager:
         Returns:
             Session-state key.
         """
-        self._log.info(
+        self._log.debug(
             "Building min input key",
             extra={"event": "ui.key.min", "nutrient": spec.key},
         )
@@ -84,7 +84,7 @@ class NutrientStateManager:
         Returns:
             Session-state key.
         """
-        self._log.info(
+        self._log.debug(
             "Building max input key",
             extra={"event": "ui.key.max", "nutrient": spec.key},
         )
@@ -101,7 +101,7 @@ class NutrientStateManager:
         Returns:
             Float value.
         """
-        self._log.info("Coercing numeric value", extra={"event": "ui.value.coerce"})
+        self._log.debug("Coercing numeric value", extra={"event": "ui.value.coerce"})
         try:
             return float(value)
         except (TypeError, ValueError):
@@ -119,7 +119,7 @@ class NutrientStateManager:
         Returns:
             Clamped value.
         """
-        self._log.info("Clamping numeric value", extra={"event": "ui.value.clamp"})
+        self._log.debug("Clamping numeric value", extra={"event": "ui.value.clamp"})
         return max(lower, min(value, upper))
 
     def initialize_nutrient_state(self, spec: NutrientSpec) -> None:
@@ -129,7 +129,7 @@ class NutrientStateManager:
         Args:
             spec: Nutrient specification.
         """
-        self._log.info(
+        self._log.debug(
             "Initializing nutrient session state",
             extra={"event": "ui.nutrient.initialize", "nutrient": spec.key},
         )
@@ -180,7 +180,7 @@ class NutrientStateManager:
         Args:
             spec: Nutrient specification.
         """
-        self._log.info(
+        self._log.debug(
             "Syncing numeric inputs from slider",
             extra={"event": "ui.sync.from_slider", "nutrient": spec.key},
         )
@@ -196,7 +196,7 @@ class NutrientStateManager:
         Args:
             spec: Nutrient specification.
         """
-        self._log.info(
+        self._log.debug(
             "Syncing slider from numeric inputs",
             extra={"event": "ui.sync.from_inputs", "nutrient": spec.key},
         )
@@ -227,11 +227,11 @@ class NutrientStateManager:
         Returns:
             Whether the current min/max pair is invalid.
         """
-        self._log.info(
+        self._log.debug(
             "Validating nutrient range",
             extra={"event": "ui.validate.range", "nutrient": spec.key},
         )
-        if self._st.session_state.get(self.any_key(spec), False):
+        if not self._st.session_state.get(self.any_key(spec), False):
             return False
         min_value = self.coerce_float(
             self._st.session_state.get(self.min_key(spec)),
@@ -261,7 +261,7 @@ class NutrientStateManager:
 
         for spec in specs:
             column_name = spec.db_column
-            if self._st.session_state.get(self.any_key(spec), False):
+            if not self._st.session_state.get(self.any_key(spec), False):
                 minimums[column_name] = None
                 maximums[column_name] = None
                 continue

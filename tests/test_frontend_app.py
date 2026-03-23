@@ -188,11 +188,12 @@ def test_query_button_runs_and_displays_results(
     frontend_logging_module: ModuleType,
 ) -> None:
     """Import the app with the search button enabled and verify the query result table."""
-    fake_streamlit.button_values = [False, False, True]
+    fake_streamlit.button_values = [True, False, True]
     fake_streamlit.connection_result = pd.DataFrame(
         {
             "food_name": ["Greek Yogurt"],
             "serving_size": ["1 cup"],
+            "value": [1.0],
             "Protein": [20.0],
             "Carbohydrate, by difference": [8.0],
         }
@@ -217,7 +218,7 @@ def test_invalid_range_shows_warning_and_disables_query_submit(
 ) -> None:
     """Show warning text and skip query when an active nutrient range is invalid."""
     fake_streamlit.button_values = [False, False, True]
-    fake_streamlit.toggle_values = {"protein_any": False}
+    fake_streamlit.toggle_values = {"protein_any": True}
     fake_streamlit.number_values = {
         "protein_min": 30.0,
         "protein_max": 10.0,
@@ -264,6 +265,8 @@ def test_any_toggle_disables_manual_nutrient_controls(
     frontend_logging_module: ModuleType,
 ) -> None:
     """Disable min, max, and slider controls when the Any toggle is enabled."""
+    fake_streamlit.toggle_values = {"protein_any": False}
+
     _load_frontend_app(
         load_module,
         fake_streamlit,
@@ -292,7 +295,7 @@ def test_manual_nutrient_controls_enabled_when_any_toggle_is_off(
     frontend_logging_module: ModuleType,
 ) -> None:
     """Keep min, max, and slider controls enabled when the Any toggle is disabled."""
-    fake_streamlit.toggle_values = {"protein_any": False}
+    fake_streamlit.toggle_values = {"protein_any": True}
 
     _load_frontend_app(
         load_module,

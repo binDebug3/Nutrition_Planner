@@ -89,7 +89,7 @@ class FilterPanel:
         Returns:
             True when the filter has an invalid min/max pair.
         """
-        self._log.info(
+        self._log.debug(
             "Rendering nutrient filter",
             extra={"event": "ui.nutrient.render", "nutrient": spec.key},
         )
@@ -106,7 +106,7 @@ class FilterPanel:
                 label_visibility="collapsed",
             )
 
-        controls_disabled = is_requirement_enabled
+        controls_disabled = not is_requirement_enabled
         self._render_slider(spec, controls_disabled, row_controls[2])
         self._render_min_max_inputs(spec, controls_disabled, row_controls[3:])
 
@@ -148,7 +148,7 @@ class FilterPanel:
             controls_disabled: Whether nutrient requirements are disabled.
             input_columns: Streamlit columns used for the min and max inputs.
         """
-        self._log.info(
+        self._log.debug(
             "Rendering nutrient min and max controls",
             extra={"event": "ui.nutrient.min_max", "nutrient": spec.key},
         )
@@ -188,7 +188,7 @@ class FilterPanel:
             controls_disabled: Whether slider should be disabled.
             slider_column: Streamlit column used for the slider.
         """
-        self._log.info(
+        self._log.debug(
             "Rendering nutrient range slider",
             extra={"event": "ui.nutrient.slider", "nutrient": spec.key},
         )

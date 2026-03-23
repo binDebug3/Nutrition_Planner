@@ -1,23 +1,30 @@
 """Convert optimizer food recommendations into meal suggestions using Gemini.
 
-This module loads a prompt template and Gemini API key from the shared
-dietetics folder, normalizes the top recommended foods into ingredient names,
-and requests meal ideas from Gemini.
+This module loads a prompt template and Gemini API key from the frontend
+Streamlit secrets file, normalizes the top recommended foods into ingredient
+names, and requests meal ideas from Gemini.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
+import tomllib
 from typing import Mapping, Protocol, Sequence
 
 
 MODULE_PATH = Path(__file__).resolve()
 REPO_ROOT = MODULE_PATH.parents[3]
 DIETETICS_ROOT = REPO_ROOT.parent
-DEFAULT_PROMPT_PATH = DIETETICS_ROOT / "data" / "prompts" / "convert_to_meals.txt"
-DEFAULT_API_KEY_PATH = DIETETICS_ROOT / "secrets" / "api_keys" / "gemini_api_key.txt"
-DEFAULT_GEMINI_MODEL = "gemini-1.5-flash"
+DEFAULT_PROMPT_PATH = REPO_ROOT / "src" / "backend" / "gemini" / "prompts" / "convert_to_meals.txt"
+DEFAULT_SECRETS_PATH = (
+    REPO_ROOT / "src" / "frontend" / "app" / ".streamlit" / "secrets.toml"
+)
+GEMINI_SECRET_SECTIONS = ("gemini", "google")
+GEMINI_SECRET_KEY = "api_key"
+TOP_LEVEL_GEMINI_SECRET_KEYS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
+DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview"
+FALLBACK_GEMINI_MODELS = ()
 TOP_INGREDIENT_COUNT = 20
 FOOD_NAME_SPLIT_DELIMITER = ","
 INGREDIENT_PREFIX = "- "
@@ -78,25 +85,68 @@ def load_prompt(prompt_path: Path = DEFAULT_PROMPT_PATH) -> str:
     return prompt_text
 
 
-def load_api_key(api_key_path: Path = DEFAULT_API_KEY_PATH) -> str:
-    """Load the Gemini API key.
+def load_streamlit_secrets(
+    secrets_path: Path = DEFAULT_SECRETS_PATH,
+) -> Mapping[str, object]:
+    """Load Streamlit secrets from the frontend TOML file.
 
     Args:
-        api_key_path: Absolute path to the Gemini API key file.
+        secrets_path: Absolute path to the Streamlit secrets TOML file.
+
+    Returns:
+        Parsed Streamlit secrets mapping.
+
+    Raises:
+        FileNotFoundError: If the secrets file path does not exist.
+        ValueError: If the secrets file does not contain a TOML object.
+    """
+    log.info("Loading Streamlit secrets file", extra={"path": str(secrets_path)})
+
+    secrets_text = secrets_path.read_text(encoding="utf-8")
+    secrets = tomllib.loads(secrets_text)
+    if not isinstance(secrets, dict):
+        raise ValueError(f"Streamlit secrets file is not a TOML object: {secrets_path}")
+    return secrets
+
+
+def load_api_key(secrets_path: Path = DEFAULT_SECRETS_PATH) -> str:
+    """Load the Gemini API key from the frontend Streamlit secrets file.
+
+    Args:
+        secrets_path: Absolute path to the Streamlit secrets TOML file.
 
     Returns:
         Gemini API key string.
 
     Raises:
-        FileNotFoundError: If the API key file path does not exist.
-        ValueError: If the API key file is empty after stripping whitespace.
+        FileNotFoundError: If the secrets file path does not exist.
+        ValueError: If the API key is missing or empty.
     """
-    log.info("Loading Gemini API key", extra={"path": str(api_key_path)})
+    log.info(
+        "Resolving Gemini API key from Streamlit secrets",
+        extra={"path": str(secrets_path)},
+    )
 
-    api_key = api_key_path.read_text(encoding="utf-8").strip()
-    if not api_key:
-        raise ValueError(f"Gemini API key file is empty: {api_key_path}")
-    return api_key
+    secrets = load_streamlit_secrets(secrets_path)
+
+    for section_name in GEMINI_SECRET_SECTIONS:
+        section = secrets.get(section_name, {})
+        if not isinstance(section, Mapping):
+            continue
+        api_key = section.get(GEMINI_SECRET_KEY)
+        if isinstance(api_key, str) and api_key.strip():
+            return api_key.strip()
+
+    for secret_key in TOP_LEVEL_GEMINI_SECRET_KEYS:
+        api_key = secrets.get(secret_key)
+        if isinstance(api_key, str) and api_key.strip():
+            return api_key.strip()
+
+    raise ValueError(
+        "Gemini API key not found in Streamlit secrets file: "
+        f"{secrets_path}. Expected [gemini].api_key, [google].api_key, "
+        "GEMINI_API_KEY, or GOOGLE_API_KEY."
+    )
 
 
 def normalize_food_name(food_name: str) -> str:
@@ -207,17 +257,49 @@ def call_gemini(
     from google import genai
 
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(model=model, contents=input_text)
-    response_text = getattr(response, "text", None)
 
-    if response_text is None:
-        raise ValueError("Gemini response did not include text.")
+    candidate_models = [model]
+    candidate_models.extend(
+        fallback_model
+        for fallback_model in FALLBACK_GEMINI_MODELS
+        if fallback_model != model
+    )
 
-    final_text = response_text.strip()
-    if not final_text:
-        raise ValueError("Gemini response text is empty.")
+    last_error: Exception | None = None
+    for candidate_model in candidate_models:
+        try:
+            response = client.models.generate_content(
+                model=candidate_model,
+                contents=input_text,
+            )
+            response_text = getattr(response, "text", None)
 
-    return final_text
+            if response_text is None:
+                raise ValueError("Gemini response did not include text.")
+
+            final_text = response_text.strip()
+            if not final_text:
+                raise ValueError("Gemini response text is empty.")
+
+            return final_text
+        except Exception as error:
+            last_error = error
+            error_text = str(error).lower()
+            model_not_found = (
+                any(token in error_text for token in ("404", "not_found", "not found"))
+                and "model" in error_text
+            )
+
+            if not model_not_found:
+                raise
+
+            log.warning(
+                "Gemini model unavailable, trying fallback model",
+                extra={"model": candidate_model},
+            )
+
+    assert last_error is not None
+    raise last_error
 
 
 def write_debug_temp_file(file_path: Path, content: str) -> None:
@@ -236,7 +318,7 @@ def write_debug_temp_file(file_path: Path, content: str) -> None:
 def convert_to_meals(
     recommended_food_rows: Sequence[Mapping[str, object]],
     prompt_path: Path = DEFAULT_PROMPT_PATH,
-    api_key_path: Path = DEFAULT_API_KEY_PATH,
+    secrets_path: Path = DEFAULT_SECRETS_PATH,
     model: str = DEFAULT_GEMINI_MODEL,
 ) -> str:
     """Convert optimizer recommendations into a Gemini meal plan response.
@@ -244,7 +326,7 @@ def convert_to_meals(
     Args:
         recommended_food_rows: Ranked recommendation rows for Gemini input.
         prompt_path: Prompt file path.
-        api_key_path: Gemini API key file path.
+        secrets_path: Streamlit secrets TOML file path.
         model: Gemini model ID.
 
     Returns:
@@ -253,7 +335,7 @@ def convert_to_meals(
     log.info("Converting optimizer recommendations to meals")
 
     prompt_text = load_prompt(prompt_path)
-    api_key = load_api_key(api_key_path)
+    api_key = load_api_key(secrets_path)
     ingredients = extract_top_ingredients(
         recommended_food_rows, limit=TOP_INGREDIENT_COUNT
     )

@@ -303,10 +303,11 @@ def _generate_meal_suggestions(
             extra={"event": "gemini.generation.completed"},
         )
         return response_text
-    except Exception:
+    except Exception as e:
         log.exception(
             "Failed to generate meal suggestions",
-            extra={"event": "gemini.generation.failed"},
+            extra={"event": "gemini.generation.failed",
+                   "error": str(e)},
         )
         st.warning(
             "Meal suggestions are temporarily unavailable. Recommendations are still shown above."
@@ -503,8 +504,7 @@ def _run_optimization(
             "Optimization failed",
             extra={"event": "optimizer.failed", "row_count": len(df)},
         )
-        st.error("Unable to compute recommendations. Showing candidate foods instead.")
-        st.table(df)
+        st.error("Unable to compute recommendations right now. Please try again.")
         return None
 
 

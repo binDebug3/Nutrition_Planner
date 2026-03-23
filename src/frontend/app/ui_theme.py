@@ -96,6 +96,11 @@ div.stButton > button:focus {{
   box-shadow: 0 0 0 0.2rem rgba(79, 209, 255, 0.35);
 }}
 
+div[data-testid="stToggle"] > label[data-baseweb="checkbox"] {{
+  transform: scale(1.3);
+  transform-origin: left center;
+}}
+
 div[data-baseweb="input"] > div,
 div[data-baseweb="select"] > div {{
   background-color: var(--surface-alt);

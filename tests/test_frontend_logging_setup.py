@@ -83,7 +83,7 @@ def test_configure_app_logging_sets_handlers_once(
         prepend_paths=[FRONTEND_APP_DIR],
         clear_modules=["logging_setup"],
     )
-    monkeypatch.setattr(module, "RotatingFileHandler", FakeRotatingFileHandler)
+    monkeypatch.setattr(module, "SafeRotatingFileHandler", FakeRotatingFileHandler)
 
     logger_map_one = module.configure_app_logging(tmp_path)
     logger_map_two = module.configure_app_logging(tmp_path)
