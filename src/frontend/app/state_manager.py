@@ -139,7 +139,7 @@ class NutrientStateManager:
         max_key = self.max_key(spec)
 
         if any_key not in self._st.session_state:
-            self._st.session_state[any_key] = True
+            self._st.session_state[any_key] = False
 
         if slider_key not in self._st.session_state:
             self._st.session_state[slider_key] = spec.defaults
@@ -231,7 +231,7 @@ class NutrientStateManager:
             "Validating nutrient range",
             extra={"event": "ui.validate.range", "nutrient": spec.key},
         )
-        if self._st.session_state.get(self.any_key(spec), False):
+        if not self._st.session_state.get(self.any_key(spec), False):
             return False
         min_value = self.coerce_float(
             self._st.session_state.get(self.min_key(spec)),
@@ -261,7 +261,7 @@ class NutrientStateManager:
 
         for spec in specs:
             column_name = spec.db_column
-            if self._st.session_state.get(self.any_key(spec), False):
+            if not self._st.session_state.get(self.any_key(spec), False):
                 minimums[column_name] = None
                 maximums[column_name] = None
                 continue

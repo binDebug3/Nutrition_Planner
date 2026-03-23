@@ -45,7 +45,7 @@ def test_initialize_nutrient_state_seeds_all_keys(
     load_module: object,
     fake_streamlit: ModuleType,
 ) -> None:
-    """Seed Any, slider, min, and max keys when they are absent."""
+    """Seed apply toggle, slider, min, and max keys when they are absent."""
     state_manager_module = _load_state_manager_module(load_module)
     models_module = _load_models_module(load_module)
     manager = state_manager_module.NutrientStateManager(
@@ -58,7 +58,7 @@ def test_initialize_nutrient_state_seeds_all_keys(
 
     manager.initialize_nutrient_state(protein_spec)
 
-    assert fake_streamlit.session_state[manager.any_key(protein_spec)] is True
+    assert fake_streamlit.session_state[manager.any_key(protein_spec)] is False
     assert fake_streamlit.session_state[manager.slider_key(protein_spec)] == (
         10.0,
         60.0,
@@ -98,7 +98,7 @@ def test_is_invalid_range_requires_manual_mode(
     load_module: object,
     fake_streamlit: ModuleType,
 ) -> None:
-    """Treat min>=max as invalid only when Any toggle is disabled."""
+    """Treat min>=max as invalid only when nutrient requirements are on."""
     state_manager_module = _load_state_manager_module(load_module)
     models_module = _load_models_module(load_module)
     manager = state_manager_module.NutrientStateManager(
@@ -108,13 +108,13 @@ def test_is_invalid_range_requires_manual_mode(
     protein_spec = next(
         spec for spec in models_module.NUTRIENT_SPECS if spec.key == "protein"
     )
-    fake_streamlit.session_state[manager.any_key(protein_spec)] = False
+    fake_streamlit.session_state[manager.any_key(protein_spec)] = True
     fake_streamlit.session_state[manager.min_key(protein_spec)] = 20.0
     fake_streamlit.session_state[manager.max_key(protein_spec)] = 20.0
 
     assert manager.is_invalid_range(protein_spec) is True
 
-    fake_streamlit.session_state[manager.any_key(protein_spec)] = True
+    fake_streamlit.session_state[manager.any_key(protein_spec)] = False
     assert manager.is_invalid_range(protein_spec) is False
 
 
@@ -122,7 +122,7 @@ def test_build_slider_bounds_respects_any_toggle(
     load_module: object,
     fake_streamlit: ModuleType,
 ) -> None:
-    """Emit None bounds for Any nutrients and values for manual nutrients."""
+    """Emit None bounds when requirements are off and values when they are on."""
     state_manager_module = _load_state_manager_module(load_module)
     models_module = _load_models_module(load_module)
     manager = state_manager_module.NutrientStateManager(
@@ -134,10 +134,10 @@ def test_build_slider_bounds_respects_any_toggle(
     )
     fat_spec = next(spec for spec in models_module.NUTRIENT_SPECS if spec.key == "fat")
 
-    fake_streamlit.session_state[manager.any_key(protein_spec)] = False
+    fake_streamlit.session_state[manager.any_key(protein_spec)] = True
     fake_streamlit.session_state[manager.min_key(protein_spec)] = 30.0
     fake_streamlit.session_state[manager.max_key(protein_spec)] = 70.0
-    fake_streamlit.session_state[manager.any_key(fat_spec)] = True
+    fake_streamlit.session_state[manager.any_key(fat_spec)] = False
 
     bounds = manager.build_slider_bounds([protein_spec, fat_spec])
 

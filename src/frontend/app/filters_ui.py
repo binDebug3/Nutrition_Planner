@@ -54,11 +54,11 @@ class FilterPanel:
         with header_columns[0]:
             self._st.subheader("Dietary Preferences")
         with header_columns[1]:
+            if self._st.button("Remove Constraints"):
+                self._state_manager.set_all_any_toggles(nutrient_specs, False)
+        with header_columns[2]:
             if self._st.button("Apply All Nutrients"):
                 self._state_manager.set_all_any_toggles(nutrient_specs, True)
-        with header_columns[2]:
-            if self._st.button("Remove Requirements"):
-                self._state_manager.set_all_any_toggles(nutrient_specs, False)
 
         preference_columns = self._st.columns([1.0] * len(DIETARY_TOGGLE_LABELS))
         dietary_preferences: Dict[str, bool] = {}
@@ -91,26 +91,20 @@ class FilterPanel:
             extra={"event": "ui.nutrient.render", "nutrient": spec.key},
         )
         self._state_manager.initialize_nutrient_state(spec)
-        header_controls = self._st.columns([0.56, 0.1, 0.17, 0.17])
+        row_controls = self._st.columns([0.22, 0.1, 0.48, 0.1, 0.1])
 
-        with header_controls[0]:
+        with row_controls[0]:
             self._st.markdown(f"**{spec.label}**")
 
-        with header_controls[1]:
-            self._st.toggle(
-                "",
+        with row_controls[1]:
+            is_requirement_enabled = self._st.toggle(
+                "Apply",
                 key=self._state_manager.any_key(spec),
-                label_visibility="collapsed",
-            )
-            self._st.write(
-                "Any"
-                if self._st.session_state[self._state_manager.any_key(spec)]
-                else ""
             )
 
-        is_any_enabled = bool(self._st.session_state[self._state_manager.any_key(spec)])
-        self._render_min_max_inputs(spec, is_any_enabled, header_controls)
-        self._render_slider(spec, is_any_enabled)
+        controls_disabled = not is_requirement_enabled
+        self._render_slider(spec, controls_disabled, row_controls[2])
+        self._render_min_max_inputs(spec, controls_disabled, row_controls[3:])
 
         has_invalid_range = self._state_manager.is_invalid_range(spec)
         if has_invalid_range:
@@ -139,22 +133,22 @@ class FilterPanel:
     def _render_min_max_inputs(
         self,
         spec: NutrientSpec,
-        is_any_enabled: bool,
-        header_controls: List[object],
+        controls_disabled: bool,
+        input_columns: List[object],
     ) -> None:
         """
         Render min and max numeric controls for a nutrient.
 
         Args:
             spec: Nutrient specification.
-            is_any_enabled: Whether manual controls are disabled.
-            header_controls: Streamlit columns used in the header row.
+            controls_disabled: Whether nutrient requirements are disabled.
+            input_columns: Streamlit columns used for the min and max inputs.
         """
         self._log.info(
             "Rendering nutrient min and max controls",
             extra={"event": "ui.nutrient.min_max", "nutrient": spec.key},
         )
-        with header_controls[2]:
+        with input_columns[0]:
             self._st.number_input(
                 "Min",
                 min_value=spec.bounds[0],
@@ -162,10 +156,10 @@ class FilterPanel:
                 key=self._state_manager.min_key(spec),
                 on_change=self._state_manager.sync_slider_from_inputs,
                 args=(spec,),
-                disabled=is_any_enabled,
+                disabled=controls_disabled,
             )
 
-        with header_controls[3]:
+        with input_columns[1]:
             self._st.number_input(
                 "Max",
                 min_value=spec.bounds[0],
@@ -173,28 +167,35 @@ class FilterPanel:
                 key=self._state_manager.max_key(spec),
                 on_change=self._state_manager.sync_slider_from_inputs,
                 args=(spec,),
-                disabled=is_any_enabled,
+                disabled=controls_disabled,
             )
 
-    def _render_slider(self, spec: NutrientSpec, is_any_enabled: bool) -> None:
+    def _render_slider(
+        self,
+        spec: NutrientSpec,
+        controls_disabled: bool,
+        slider_column: object,
+    ) -> None:
         """
         Render range slider for a nutrient.
 
         Args:
             spec: Nutrient specification.
-            is_any_enabled: Whether slider should be disabled.
+            controls_disabled: Whether slider should be disabled.
+            slider_column: Streamlit column used for the slider.
         """
         self._log.info(
             "Rendering nutrient range slider",
             extra={"event": "ui.nutrient.slider", "nutrient": spec.key},
         )
-        self._st.slider(
-            "Range",
-            min_value=spec.bounds[0],
-            max_value=spec.bounds[1],
-            key=self._state_manager.slider_key(spec),
-            value=spec.defaults,
-            on_change=self._state_manager.sync_inputs_from_slider,
-            args=(spec,),
-            disabled=is_any_enabled,
-        )
+        with slider_column:
+            self._st.slider(
+                "Range",
+                min_value=spec.bounds[0],
+                max_value=spec.bounds[1],
+                key=self._state_manager.slider_key(spec),
+                value=spec.defaults,
+                on_change=self._state_manager.sync_inputs_from_slider,
+                args=(spec,),
+                disabled=controls_disabled,
+            )

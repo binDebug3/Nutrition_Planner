@@ -11,11 +11,13 @@ import sqlite3
 from pathlib import Path
 from typing import List, Tuple
 
-import psycopg2
+from sqlalchemy import create_engine, text
 
 
 LOGGER = logging.getLogger("nutients_app.auth.migration")
 REMOTE_USERS_TABLE = "app_logins"
+SCRIPT_PATH = Path(__file__).resolve()
+DEFAULT_NEON_URL_PATH = SCRIPT_PATH.parents[2] / "secrets" / "passwords" / "neon.txt"
 
 
 def configure_logging() -> None:
@@ -46,11 +48,34 @@ def parse_args() -> argparse.Namespace:
         help="Path to local SQLite users database.",
     )
     parser.add_argument(
-        "--postgres-url",
-        required=True,
-        help="Postgres connection URL.",
+        "--neon-url-path",
+        default=str(DEFAULT_NEON_URL_PATH),
+        help="Path to file containing the Neon Postgres connection URL.",
     )
     return parser.parse_args()
+
+
+def load_neon_url(neon_url_path: Path) -> str:
+    """
+    Load the Neon connection URL from a secret file.
+
+    Args:
+        neon_url_path: Path to the Neon secret file.
+
+    Returns:
+        Connection string loaded from the secret file.
+    """
+    LOGGER.info(
+        "Loading Neon connection URL",
+        extra={"event": "migration.neon.url.load", "path": str(neon_url_path)},
+    )
+    if not neon_url_path.exists():
+        raise FileNotFoundError(f"Neon URL file not found: {neon_url_path}")
+
+    neon_url = neon_url_path.read_text(encoding="utf-8").strip()
+    if not neon_url:
+        raise ValueError(f"Neon URL file is empty: {neon_url_path}")
+    return neon_url
 
 
 def load_local_users(sqlite_db_path: Path) -> List[Tuple[str, str, str]]:
@@ -81,20 +106,21 @@ def load_local_users(sqlite_db_path: Path) -> List[Tuple[str, str, str]]:
     return [(str(row[0]), str(row[1]), str(row[2])) for row in rows]
 
 
-def ensure_remote_table(postgres_url: str) -> None:
+def ensure_remote_table(neon_url: str) -> None:
     """
-    Ensure remote Postgres login table exists.
+    Ensure remote Neon login table exists.
 
     Args:
-        postgres_url: Postgres connection URL.
+        neon_url: Neon Postgres connection URL.
     """
     LOGGER.info(
         "Ensuring remote login table exists",
         extra={"event": "migration.remote.table.ensure"},
     )
-    with psycopg2.connect(postgres_url) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(
+    engine = create_engine(neon_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
                 f"""
                 CREATE TABLE IF NOT EXISTS {REMOTE_USERS_TABLE} (
                     username TEXT PRIMARY KEY,
@@ -103,15 +129,15 @@ def ensure_remote_table(postgres_url: str) -> None:
                 )
                 """
             )
-        connection.commit()
+        )
 
 
-def upload_users(postgres_url: str, users: List[Tuple[str, str, str]]) -> int:
+def upload_users(neon_url: str, users: List[Tuple[str, str, str]]) -> int:
     """
-    Upload users to remote Postgres login table.
+    Upload users to remote Neon login table.
 
     Args:
-        postgres_url: Postgres connection URL.
+        neon_url: Neon Postgres connection URL.
         users: User rows from local SQLite.
 
     Returns:
@@ -124,21 +150,26 @@ def upload_users(postgres_url: str, users: List[Tuple[str, str, str]]) -> int:
     if not users:
         return 0
 
-    with psycopg2.connect(postgres_url) as connection:
-        with connection.cursor() as cursor:
-            for username, password_hash, created_at in users:
-                cursor.execute(
+    engine = create_engine(neon_url)
+    with engine.begin() as connection:
+        for username, password_hash, created_at in users:
+            connection.execute(
+                text(
                     f"""
                     INSERT INTO {REMOTE_USERS_TABLE} (username, password_hash, created_at)
-                    VALUES (%s, %s, %s)
+                    VALUES (:username, :password_hash, :created_at)
                     ON CONFLICT (username)
                     DO UPDATE SET
                         password_hash = EXCLUDED.password_hash,
                         created_at = EXCLUDED.created_at
-                    """,
-                    (username, password_hash, created_at),
-                )
-        connection.commit()
+                    """
+                ),
+                {
+                    "username": username,
+                    "password_hash": password_hash,
+                    "created_at": created_at,
+                },
+            )
     return len(users)
 
 
@@ -149,10 +180,12 @@ def main() -> None:
     configure_logging()
     args = parse_args()
     sqlite_db_path = Path(args.sqlite_db).resolve()
+    neon_url_path = Path(args.neon_url_path).resolve()
+    neon_url = load_neon_url(neon_url_path)
 
     users = load_local_users(sqlite_db_path)
-    ensure_remote_table(args.postgres_url)
-    migrated_count = upload_users(args.postgres_url, users)
+    ensure_remote_table(neon_url)
+    migrated_count = upload_users(neon_url, users)
 
     LOGGER.info(
         "Migration completed",
