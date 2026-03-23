@@ -52,6 +52,6 @@ engine = create_engine(NEON_URL)
 # This pushes the data. It will create all 79 columns for you.
 # Note: If your file is over 0.5 GB, this will likely error out when it hits the limit.
 LOGGER.info("Writing DataFrame to SQL table food_data with if_exists=replace")
-df.to_sql("food_data", engine, if_exists="replace", index=False)
+df.to_sql("food_nutrients", engine, if_exists="replace", index=False)
 
 LOGGER.info("Database initialization finished")

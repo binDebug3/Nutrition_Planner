@@ -54,7 +54,7 @@ class Simplex:
         bounds: Min/max nutrient bounds built from the UI sliders.
     """
 
-    _VALUE_COLUMN = "Value"
+    _VALUE_COLUMN = "value"
     _NAME_COLUMN = "food_name"
 
     def __init__(self, data: pd.DataFrame, bounds: SliderBounds) -> None:
@@ -74,7 +74,7 @@ class Simplex:
             raise ValueError("Input data must contain at least one food row.")
 
         if self._VALUE_COLUMN not in data.columns:
-            raise ValueError("Input data must include a Value column.")
+            raise ValueError("Input data must include a value column.")
 
         if self._NAME_COLUMN not in data.columns:
             raise ValueError("Input data must include a food_name column.")

@@ -40,7 +40,7 @@ class NutrientSpec:
     Args:
         key: Stable session-state key prefix.
         label: Display name in the UI.
-        db_column: Column name in the `food_data` table.
+        db_column: Column name in the `food_nutrients` table.
         bounds: Inclusive min and max allowed values.
         defaults: Default min and max values.
     """
@@ -57,7 +57,7 @@ NUTRIENT_SPECS: List[NutrientSpec] = [
         "kilocalories",
         "Kilocalories",
         "kilocalories",
-        (0.0, 1200.0),
+        (0.0, 4000.0),
         (100.0, 700.0),
     ),
     NutrientSpec("fat", "Fat", "fat", (0.0, 100.0), (5.0, 40.0)),
@@ -79,15 +79,15 @@ NUTRIENT_SPECS: List[NutrientSpec] = [
     NutrientSpec(
         "cholesterol",
         "Cholesterol",
-        "cholesterol",
+        "Cholesterol",
         (0.0, 300.0),
         (0.0, 75.0),
     ),
-    NutrientSpec("protein", "Protein", "protein", (0.0, 100.0), (10.0, 60.0)),
+    NutrientSpec("protein", "Protein", "Protein", (0.0, 100.0), (10.0, 60.0)),
     NutrientSpec(
         "carbs",
         "Carbs",
-        "carbs",
+        "Carbohydrate, by summation",
         (0.0, 150.0),
         (10.0, 80.0),
     ),
@@ -529,7 +529,7 @@ def _render_recommended_foods(
     recommendation_df = df.copy()
     recommendation_df["recommended_servings"] = result.servings
     recommendation_df["value_contribution"] = (
-        recommendation_df["recommended_servings"] * recommendation_df["Value"]
+        recommendation_df["recommended_servings"] * recommendation_df["value"]
     )
 
     ranked_df = recommendation_df[
@@ -553,7 +553,7 @@ def _render_recommended_foods(
         "food_name",
         "serving_size",
         "recommended_servings",
-        "Value",
+        "value",
         "value_contribution",
     ]
     st.table(ranked_df[display_columns])
@@ -567,7 +567,7 @@ def _render_recommended_foods(
             [
                 "food_name",
                 "serving_size",
-                "Value",
+                "value",
                 "recommended_servings",
                 "value_contribution",
             ]
@@ -577,7 +577,7 @@ def _render_recommended_foods(
 
 def _build_where_clauses(specs: List[NutrientSpec]) -> List[str]:
     """
-    Build SQL filter clauses from nutrient selections.
+    Build SQL filter clauses.
 
     Args:
         specs: Nutrient specifications.
@@ -588,26 +588,8 @@ def _build_where_clauses(specs: List[NutrientSpec]) -> List[str]:
     query_log.info(
         "Building nutrient SQL predicates", extra={"event": "query.sql.where_build"}
     )
-    clauses: List[str] = []
-
-    for spec in specs:
-        if st.session_state.get(_any_key(spec), False):
-            continue
-
-        min_value = _coerce_float(
-            st.session_state.get(_min_key(spec)), spec.defaults[0]
-        )
-        max_value = _coerce_float(
-            st.session_state.get(_max_key(spec)), spec.defaults[1]
-        )
-        min_literal = _format_sql_number(min_value)
-        max_literal = _format_sql_number(max_value)
-        clauses.append(f'"{spec.db_column}" >= {min_literal}')
-        clauses.append(f'"{spec.db_column}" <= {max_literal}')
-
-    if not clauses:
-        return ["1=1"]
-    return clauses
+    _ = specs
+    return ["1=1"]
 
 
 def _build_food_query(specs: List[NutrientSpec]) -> str:
@@ -626,7 +608,7 @@ def _build_food_query(specs: List[NutrientSpec]) -> str:
         WITH nutrient_view AS (
             SELECT
                 fdc_id,
-                "Value" AS Value,
+                "Value" AS value,
                 food_name,
                 serving_size,
                 "Energy [id:1008]" AS kilocalories,
@@ -634,8 +616,8 @@ def _build_food_query(specs: List[NutrientSpec]) -> str:
                 "Fatty acids, total saturated" AS saturated_fat,
                 COALESCE("Sugars, Total", "Total Sugars") AS sugar,
                 "Sodium, Na" AS sodium,
-                Cholesterol AS cholesterol,
-                Protein AS protein,
+                "Cholesterol" AS cholesterol,
+                "Protein" AS protein,
                 COALESCE(
                     "Carbohydrate, by difference",
                     "Carbohydrate, by summation"
@@ -645,16 +627,16 @@ def _build_food_query(specs: List[NutrientSpec]) -> str:
                 "Potassium, K" AS potassium,
                 "Fiber, total dietary" AS fiber,
                 "Vitamin A, RAE" AS vitamin_a,
-                Thiamin AS vitamin_b,
+                "Thiamin" AS vitamin_b,
                 "Vitamin C, total ascorbic acid" AS vitamin_c,
                 "Vitamin D (D2 + D3)" AS vitamin_d,
                 "Vitamin E (alpha-tocopherol)" AS vitamin_e,
                 "Vitamin K (phylloquinone)" AS vitamin_k
-            FROM food_data
+            FROM food_nutrients
         )
         SELECT
             fdc_id,
-            Value,
+            value,
             food_name,
             serving_size,
             kilocalories,
@@ -897,10 +879,8 @@ if st.button("Find Foods", disabled=has_invalid_ranges):
         "Food query started",
         extra={
             "event": "db.query_started",
-            "active_filters": sum(
-                1
-                for nutrient in NUTRIENT_SPECS
-                if not st.session_state.get(_any_key(nutrient), False)
+            "active_dietary_filters": sum(
+                int(enabled) for enabled in dietary_preferences.values()
             ),
             "invalid_ranges": has_invalid_ranges,
         },
