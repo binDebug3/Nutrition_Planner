@@ -83,3 +83,53 @@ def test_normalize_username_trims_whitespace(
     normalized = service.normalize_username("  alice  ")
 
     assert normalized == "alice"
+
+
+def test_credentials_match_uses_remote_store_when_configured(
+    load_module: object,
+    fake_streamlit: ModuleType,
+    tmp_path: object,
+) -> None:
+    """Authenticate against remote store when a Postgres URL exists in secrets."""
+    auth_service_module = _load_auth_service_module(load_module)
+    fake_streamlit.secrets = {
+        "connections": {"postgresql": {"url": "postgresql://example"}},
+        "passwords": {},
+    }
+    stored_hash = auth_service_module.create_user.__globals__["hash_password"]("secret")
+    auth_service_module.get_remote_user_password_hash = lambda url, username: (
+        stored_hash
+    )
+
+    service = auth_service_module.AuthService(
+        fake_streamlit,
+        logging.getLogger("test.auth"),
+        logging.getLogger("test.app"),
+        tmp_path / "users.db",
+    )
+
+    assert service.credentials_match("alice", "secret") is True
+
+
+def test_create_account_uses_remote_store_when_configured(
+    load_module: object,
+    fake_streamlit: ModuleType,
+    tmp_path: object,
+) -> None:
+    """Create account through remote store when Postgres URL is configured."""
+    auth_service_module = _load_auth_service_module(load_module)
+    fake_streamlit.secrets = {
+        "connections": {"postgresql": {"url": "postgresql://example"}},
+        "passwords": {},
+    }
+    auth_service_module.get_remote_user_password_hash = lambda url, username: None
+    auth_service_module.create_remote_user = lambda url, username, password: True
+
+    service = auth_service_module.AuthService(
+        fake_streamlit,
+        logging.getLogger("test.auth"),
+        logging.getLogger("test.app"),
+        tmp_path / "users.db",
+    )
+
+    assert service.create_account("alice", "secret") is True

@@ -188,7 +188,7 @@ def test_query_button_runs_and_displays_results(
     frontend_logging_module: ModuleType,
 ) -> None:
     """Import the app with the search button enabled and verify the query result table."""
-    fake_streamlit.button_values = [True]
+    fake_streamlit.button_values = [False, False, True]
     fake_streamlit.connection_result = pd.DataFrame(
         {
             "food_name": ["Greek Yogurt"],
@@ -216,7 +216,7 @@ def test_invalid_range_shows_warning_and_disables_query_submit(
     frontend_logging_module: ModuleType,
 ) -> None:
     """Show warning text and skip query when an active nutrient range is invalid."""
-    fake_streamlit.button_values = [True]
+    fake_streamlit.button_values = [False, False, True]
     fake_streamlit.toggle_values = {"protein_any": False}
     fake_streamlit.number_values = {
         "protein_min": 30.0,

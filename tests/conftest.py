@@ -260,7 +260,7 @@ class FakeForm:
         """
         return self._streamlit_module.text_input(label, type=type)
 
-    def form_submit_button(self, label: str) -> bool:
+    def form_submit_button(self, label: str, disabled: bool = False) -> bool:
         """
         Proxy form submit calls to the parent module.
 
@@ -270,7 +270,30 @@ class FakeForm:
         Returns:
             Submit state.
         """
-        return self._streamlit_module.form_submit_button(label)
+        return self._streamlit_module.form_submit_button(label, disabled=disabled)
+
+
+class FakeSpinner:
+    """Context manager used to emulate Streamlit spinner blocks."""
+
+    def __enter__(self) -> "FakeSpinner":
+        """Enter spinner context."""
+        return self
+
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> bool:
+        """
+        Exit spinner context.
+
+        Args:
+            exc_type: Exception type.
+            exc_val: Exception value.
+            exc_tb: Traceback object.
+
+        Returns:
+            False to propagate exceptions.
+        """
+        _ = (exc_type, exc_val, exc_tb)
+        return False
 
 
 class FakeStreamlit(types.ModuleType):
@@ -286,6 +309,7 @@ class FakeStreamlit(types.ModuleType):
         self.number_values: dict[str, float] = {}
         self.toggle_values: dict[str, bool] = {}
         self.slider_values: dict[str, tuple[float, float] | float] = {}
+        self.selectbox_values: dict[str, object] = {}
         self.button_values: list[bool] = []
         self.errors: list[str] = []
         self.warnings: list[str] = []
@@ -351,7 +375,7 @@ class FakeStreamlit(types.ModuleType):
         _ = (key, clear_on_submit)
         return FakeForm(self)
 
-    def form_submit_button(self, label: str) -> bool:
+    def form_submit_button(self, label: str, disabled: bool = False) -> bool:
         """
         Return the next configured form submit state.
 
@@ -361,7 +385,49 @@ class FakeStreamlit(types.ModuleType):
         Returns:
             Next boolean state, or False when no value is queued.
         """
-        return self.button(label)
+        return self.button(label, disabled=disabled)
+
+    def selectbox(
+        self,
+        label: str,
+        options: list[object],
+        index: int = 0,
+        key: str | None = None,
+    ) -> object:
+        """
+        Return configured selectbox value or default option.
+
+        Args:
+            label: Selectbox label.
+            options: Selectable options.
+            index: Default option index.
+            key: Session-state key.
+
+        Returns:
+            Selected option value.
+        """
+        resolved_key = key or label
+        if resolved_key in self.selectbox_values:
+            resolved_value = self.selectbox_values[resolved_key]
+        elif resolved_key in self.session_state:
+            resolved_value = self.session_state[resolved_key]
+        else:
+            resolved_value = options[index]
+        self.session_state[resolved_key] = resolved_value
+        return resolved_value
+
+    def spinner(self, text: str) -> FakeSpinner:
+        """
+        Return a fake spinner context manager.
+
+        Args:
+            text: Spinner text.
+
+        Returns:
+            Spinner context manager.
+        """
+        _ = text
+        return FakeSpinner()
 
     def toggle(
         self,

@@ -164,5 +164,18 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 
 ## Authentication
 The Streamlit frontend supports login with credentials defined in `.streamlit/secrets.toml`.
-New users can also create accounts from the login screen, and those passwords are stored as
-PBKDF2 hashes in `src/frontend/app/.streamlit/users.db`.
+
+For production, account login and signup use a Postgres table named `app_logins` using the
+`connections.postgresql.url` secret configured for Streamlit. Passwords are stored as PBKDF2
+hashes.
+
+For local development without a Postgres URL, the app falls back to
+`src/frontend/app/.streamlit/users.db`.
+
+To migrate existing local users to Postgres one time, run:
+
+```bash
+python scripts/migrate_logins_to_postgres.py \
+  --sqlite-db src/frontend/app/.streamlit/users.db \
+  --postgres-url "<your-postgres-url>"
+```

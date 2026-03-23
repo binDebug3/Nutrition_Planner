@@ -1,9 +1,15 @@
 """Authentication service for Streamlit login and signup flows."""
 
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Optional
 
-from auth_store import create_user, get_user_password_hash, password_matches
+from auth_store import (
+    create_remote_user,
+    create_user,
+    get_remote_user_password_hash,
+    get_user_password_hash,
+    password_matches,
+)
 
 
 class AuthService:
@@ -37,6 +43,30 @@ class AuthService:
         self._auth_log = auth_logger
         self._log = app_logger
         self.user_db_path = user_db_path
+        self._postgres_url = self._resolve_postgres_url()
+
+    def _resolve_postgres_url(self) -> Optional[str]:
+        """
+        Resolve Postgres URL from Streamlit secrets.
+
+        Returns:
+            Postgres URL when configured, otherwise None.
+        """
+        self._auth_log.info(
+            "Resolving Postgres auth connection URL",
+            extra={"event": "auth.remote_url_resolve"},
+        )
+        connections = self._st.secrets.get("connections", {})
+        if isinstance(connections, Mapping):
+            postgresql = connections.get("postgresql", {})
+            if isinstance(postgresql, Mapping):
+                url = postgresql.get("url")
+                if isinstance(url, str) and url.strip():
+                    return url.strip()
+        direct_url = self._st.secrets.get("POSTGRES_URL")
+        if isinstance(direct_url, str) and direct_url.strip():
+            return direct_url.strip()
+        return None
 
     def normalize_username(self, username: str) -> str:
         """
@@ -104,9 +134,17 @@ class AuthService:
                 },
             )
             return False
-        stored_password_hash = get_user_password_hash(
-            self.user_db_path, normalized_username
-        )
+        stored_password_hash: Optional[str]
+        if self._postgres_url:
+            stored_password_hash = get_remote_user_password_hash(
+                self._postgres_url,
+                normalized_username,
+            )
+        else:
+            stored_password_hash = get_user_password_hash(
+                self.user_db_path,
+                normalized_username,
+            )
         if stored_password_hash is not None:
             is_authenticated = password_matches(password, stored_password_hash)
         else:
@@ -136,7 +174,15 @@ class AuthService:
             return False
         if self._username_exists(normalized_username):
             return False
-        if not create_user(self.user_db_path, normalized_username, password):
+        if self._postgres_url:
+            created = create_remote_user(
+                self._postgres_url,
+                normalized_username,
+                password,
+            )
+        else:
+            created = create_user(self.user_db_path, normalized_username, password)
+        if not created:
             self._st.error("Username already exists")
             return False
         self._auth_log.info(
@@ -213,10 +259,21 @@ class AuthService:
             )
             return True
 
-        if get_user_password_hash(self.user_db_path, normalized_username) is not None:
+        if self._postgres_url:
+            existing_password_hash = get_remote_user_password_hash(
+                self._postgres_url,
+                normalized_username,
+            )
+        else:
+            existing_password_hash = get_user_password_hash(
+                self.user_db_path,
+                normalized_username,
+            )
+
+        if existing_password_hash is not None:
             self._st.error("Username already exists")
             self._auth_log.warning(
-                "Signup failed because the username exists in the local credential store",
+                "Signup failed because the username exists in the credential store",
                 extra={
                     "event": "auth.signup_conflict",
                     "username": normalized_username,

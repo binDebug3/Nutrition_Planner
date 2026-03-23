@@ -17,11 +17,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import psycopg2
+
 
 AUTH_LOG = logging.getLogger("nutients_app.auth")
 PBKDF2_ITERATIONS = 310_000
 PASSWORD_HASH_PREFIX = "pbkdf2_sha256"
 SALT_BYTES = 16
+REMOTE_USERS_TABLE = "app_logins"
 
 
 def hash_password(password: str) -> str:
@@ -117,6 +120,101 @@ def get_user_password_hash(db_path: Path, username: str) -> Optional[str]:
     if row is None:
         return None
     return str(row[0])
+
+
+def ensure_remote_users_table(postgres_url: str) -> None:
+    """
+    Create the remote login table when it does not yet exist.
+
+    Args:
+        postgres_url: Postgres connection URL.
+    """
+    AUTH_LOG.info(
+        "Ensuring remote login table exists",
+        extra={"event": "auth.remote_table_ensure_started"},
+    )
+    with psycopg2.connect(postgres_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {REMOTE_USERS_TABLE} (
+                    username TEXT PRIMARY KEY,
+                    password_hash TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+        connection.commit()
+
+
+def get_remote_user_password_hash(postgres_url: str, username: str) -> Optional[str]:
+    """
+    Fetch a user password hash from the remote Postgres login table.
+
+    Args:
+        postgres_url: Postgres connection URL.
+        username: Username to look up.
+
+    Returns:
+        Password hash when found, otherwise None.
+    """
+    AUTH_LOG.info(
+        "Looking up remote user credentials",
+        extra={"event": "auth.remote_lookup", "username": username},
+    )
+    ensure_remote_users_table(postgres_url)
+    with psycopg2.connect(postgres_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT password_hash FROM {REMOTE_USERS_TABLE} WHERE username = %s",
+                (username,),
+            )
+            row = cursor.fetchone()
+
+    if row is None:
+        return None
+    return str(row[0])
+
+
+def create_remote_user(postgres_url: str, username: str, password: str) -> bool:
+    """
+    Create a user in the remote Postgres login table.
+
+    Args:
+        postgres_url: Postgres connection URL.
+        username: Username to insert.
+        password: Raw password to hash and store.
+
+    Returns:
+        True when created, False when username already exists.
+    """
+    AUTH_LOG.info(
+        "Creating remote user account",
+        extra={"event": "auth.remote_create_started", "username": username},
+    )
+    ensure_remote_users_table(postgres_url)
+    created_at = datetime.now(timezone.utc)
+    password_hash = hash_password(password)
+
+    with psycopg2.connect(postgres_url) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO {REMOTE_USERS_TABLE} (username, password_hash, created_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (username) DO NOTHING
+                """,
+                (username, password_hash, created_at),
+            )
+            created = cursor.rowcount > 0
+        connection.commit()
+
+    if not created:
+        AUTH_LOG.warning(
+            "User account already exists in remote credential store",
+            extra={"event": "auth.remote_create_conflict", "username": username},
+        )
+    return created
 
 
 def create_user(db_path: Path, username: str, password: str) -> bool:
