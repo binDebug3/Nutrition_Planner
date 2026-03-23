@@ -334,7 +334,9 @@ class RecommendationView:
                 )
             summary_rows.append(row_data)
 
-        return pd.DataFrame(summary_rows)
+        summary_df = pd.DataFrame(summary_rows)
+        summary_df = summary_df.astype(str)
+        return summary_df
 
     def _render_candidate_table(self, recommendation_df: object) -> None:
         """

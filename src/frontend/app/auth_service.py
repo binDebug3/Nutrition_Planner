@@ -173,6 +173,7 @@ class AuthService:
         if not self._validate_signup_input(normalized_username, password):
             return False
         if self._username_exists(normalized_username):
+            self._show_dismissible_error("Username already exists")
             return False
         if self._postgres_url:
             created = create_remote_user(
@@ -183,7 +184,7 @@ class AuthService:
         else:
             created = create_user(self.user_db_path, normalized_username, password)
         if not created:
-            self._st.error("Username already exists")
+            self._show_dismissible_error("Failed to create account")
             return False
         self._auth_log.info(
             "Signup succeeded",
@@ -227,10 +228,10 @@ class AuthService:
             "Validating signup input", extra={"event": "auth.signup_validate"}
         )
         if not normalized_username:
-            self._st.error("Username is required")
+            self._show_dismissible_error("Username is required")
             return False
         if not password.strip():
-            self._st.error("Password is required")
+            self._show_dismissible_error("Password is required")
             return False
         return True
 
@@ -249,7 +250,6 @@ class AuthService:
             extra={"event": "auth.signup_uniqueness", "username": normalized_username},
         )
         if normalized_username in self.get_secret_login_map():
-            self._st.error("Username already exists")
             self._auth_log.warning(
                 "Signup failed because the username exists in Streamlit secrets",
                 extra={
@@ -271,7 +271,6 @@ class AuthService:
             )
 
         if existing_password_hash is not None:
-            self._st.error("Username already exists")
             self._auth_log.warning(
                 "Signup failed because the username exists in the credential store",
                 extra={
@@ -314,10 +313,31 @@ class AuthService:
         self._auth_log.info("Rendering auth form", extra={"event": "auth.form_render"})
         self._st.subheader("Login or Sign Up")
         with self._st.form("auth_login_form", clear_on_submit=False):
-            username = self._st.text_input("Username")
-            password = self._st.text_input("Password", type="password")
+            username = self._st.text_input(
+                "Username",
+                key="auth_username_input",
+            )
+            password = self._st.text_input(
+                "Password",
+                type="password",
+                key="auth_password_input",
+            )
             login_submitted = self._st.form_submit_button("Login")
         return username, password, login_submitted
+
+    def _show_dismissible_error(self, message: str) -> None:
+        """
+        Show an error message that auto-dismisses after 10 seconds.
+
+        Args:
+            message: Error message text.
+        """
+        if hasattr(self._st, "toast"):
+            self._st.toast(message, icon="❌")
+        else:
+            error_placeholder = self._st.empty()
+            with error_placeholder.container():
+                self._st.error(message)
 
     def _handle_login_submit(
         self,
@@ -344,7 +364,7 @@ class AuthService:
             self._st.session_state.current_username = normalized_username
             self._st.rerun()
         else:
-            self._st.error("Invalid username or password")
+            self._show_dismissible_error("Invalid username or password")
         return False
 
     def _handle_signup_submit(
