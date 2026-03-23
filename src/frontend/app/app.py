@@ -1,7 +1,9 @@
 """Streamlit frontend for nutrient filtering and food lookup."""
 
+import importlib.util
 import time
 from pathlib import Path
+from types import ModuleType
 from typing import Dict, List, Optional
 
 import streamlit as st
@@ -21,6 +23,9 @@ from ui_theme import apply_dark_theme
 APP_PATH = Path(__file__).resolve()
 APP_DIR = APP_PATH.parent
 REPO_ROOT = APP_PATH.parents[3]
+GEMINI_CONVERT_MODULE_PATH = (
+    REPO_ROOT / "src" / "backend" / "gemini" / "convert_to_meals.py"
+)
 USER_DB_PATH = APP_DIR / ".streamlit" / "users.db"
 LOGGER_MAP = configure_app_logging(REPO_ROOT)
 log = LOGGER_MAP["app"]
@@ -208,6 +213,107 @@ def _render_recommended_foods(
     )
 
 
+def _load_gemini_convert_module() -> ModuleType:
+    """Load the backend Gemini convert module from source path.
+
+    Returns:
+        Imported Gemini conversion module.
+
+    Raises:
+        FileNotFoundError: If the conversion module file is missing.
+        ImportError: If module loading fails.
+    """
+    log.info(
+        "Loading backend Gemini conversion module",
+        extra={"event": "gemini.module_load", "path": str(GEMINI_CONVERT_MODULE_PATH)},
+    )
+
+    if not GEMINI_CONVERT_MODULE_PATH.exists():
+        raise FileNotFoundError(
+            f"Gemini conversion module not found: {GEMINI_CONVERT_MODULE_PATH}"
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "nutients_app_backend_gemini_convert_to_meals",
+        GEMINI_CONVERT_MODULE_PATH,
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(
+            f"Unable to create import spec for {GEMINI_CONVERT_MODULE_PATH}"
+        )
+
+    gemini_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gemini_module)
+    return gemini_module
+
+
+def _generate_meal_suggestions(
+    df: object,
+    optimization_result: OptimizationResult,
+) -> Optional[str]:
+    """Generate meal suggestions from optimizer results via Gemini.
+
+    Args:
+        df: Food candidate dataframe used by optimization.
+        optimization_result: Completed optimization result.
+
+    Returns:
+        Markdown-friendly meal suggestion text, or None when generation fails.
+    """
+    log.info(
+        "Generating meal suggestions from optimization result",
+        extra={"event": "gemini.generation.started"},
+    )
+
+    try:
+        gemini_module = _load_gemini_convert_module()
+        convert_to_meals = getattr(gemini_module, "convert_to_meals", None)
+        if not callable(convert_to_meals):
+            raise AttributeError("convert_to_meals callable not found in Gemini module")
+
+        food_names = [str(value) for value in df["food_name"].tolist()]
+        serving_sizes = [str(value) for value in df["serving_size"].tolist()]
+        value_list = [float(value) for value in df["value"].tolist()]
+
+        ranked_rows: list[dict[str, object]] = []
+        for index, serving_count in enumerate(optimization_result.servings.tolist()):
+            if float(serving_count) <= 1e-8:
+                continue
+
+            ranked_rows.append(
+                {
+                    "food_name": food_names[index],
+                    "serving_size": serving_sizes[index],
+                    "serving_count": float(serving_count),
+                    "value_contribution": float(serving_count) * value_list[index],
+                }
+            )
+
+        ranked_rows.sort(
+            key=lambda row: (
+                float(row["value_contribution"]),
+                float(row["serving_count"]),
+            ),
+            reverse=True,
+        )
+
+        response_text = convert_to_meals(ranked_rows)
+        log.info(
+            "Meal suggestions generated",
+            extra={"event": "gemini.generation.completed"},
+        )
+        return response_text
+    except Exception:
+        log.exception(
+            "Failed to generate meal suggestions",
+            extra={"event": "gemini.generation.failed"},
+        )
+        st.warning(
+            "Meal suggestions are temporarily unavailable. Recommendations are still shown above."
+        )
+        return None
+
+
 def credentials_match(username: str, password: str) -> bool:
     """
     Validate a username and password pair.
@@ -251,7 +357,7 @@ def check_password() -> bool:
     if st.session_state.authenticated:
         return True
 
-    st.title("Nutrition Planner")
+    st.title("Nutrition Planner (Beta)")
     st.subheader("Login or Sign Up")
     with st.form("auth_login_form", clear_on_submit=False):
         username = st.text_input("Username")
@@ -410,7 +516,7 @@ def run_app() -> None:
     if not check_password():
         st.stop()
     conn = st.connection("postgresql", type="sql")
-    st.title("Nutrition Planner")
+    st.title("Nutrition Planner (Beta)")
     dietary_preferences = _render_dietary_toggles()
 
     max_servings_per_food = st.selectbox(
@@ -474,6 +580,12 @@ def run_app() -> None:
             active_nutrient_columns,
             bounds,
         )
+
+        with st.spinner("Generating meal suggestions..."):
+            meal_suggestions = _generate_meal_suggestions(df, optimization_result)
+
+        if meal_suggestions:
+            RECOMMENDATION_VIEW.render_meal_suggestions(meal_suggestions)
 
 
 run_app()

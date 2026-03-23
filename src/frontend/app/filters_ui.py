@@ -106,7 +106,7 @@ class FilterPanel:
                 label_visibility="collapsed",
             )
 
-        controls_disabled = not is_requirement_enabled
+        controls_disabled = is_requirement_enabled
         self._render_slider(spec, controls_disabled, row_controls[2])
         self._render_min_max_inputs(spec, controls_disabled, row_controls[3:])
 

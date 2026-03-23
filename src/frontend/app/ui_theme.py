@@ -180,6 +180,28 @@ div[data-testid="stDataFrame"] div[role="gridcell"] {{
   padding: 0.5rem 0.7rem;
   margin: 0.45rem 0 0.8rem 0;
 }}
+
+.meal-suggestions {{
+  background: linear-gradient(180deg, rgba(22, 28, 43, 0.92), rgba(14, 18, 30, 0.92));
+  border: 1px solid rgba(66, 245, 209, 0.42);
+  border-radius: 16px;
+  padding: 0.95rem 1rem;
+  margin: 0.35rem 0 0.95rem 0;
+}}
+
+.meal-suggestions p,
+.meal-suggestions li,
+.meal-suggestions h1,
+.meal-suggestions h2,
+.meal-suggestions h3,
+.meal-suggestions h4 {{
+  color: var(--text);
+}}
+
+.meal-suggestions ul,
+.meal-suggestions ol {{
+  padding-left: 1.2rem;
+}}
 </style>
 """
 
