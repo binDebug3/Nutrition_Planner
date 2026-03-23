@@ -40,7 +40,7 @@ class NutrientSpec:
     Args:
         key: Stable session-state key prefix.
         label: Display name in the UI.
-        db_column: Column name in the `food_nutrition` table.
+        db_column: Column name in the `food_data` table.
         bounds: Inclusive min and max allowed values.
         defaults: Default min and max values.
     """
@@ -650,7 +650,7 @@ def _build_food_query(specs: List[NutrientSpec]) -> str:
                 "Vitamin D (D2 + D3)" AS vitamin_d,
                 "Vitamin E (alpha-tocopherol)" AS vitamin_e,
                 "Vitamin K (phylloquinone)" AS vitamin_k
-            FROM food_nutrition
+            FROM food_data
         )
         SELECT
             fdc_id,
